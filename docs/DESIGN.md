@@ -77,7 +77,8 @@ QuotaGlass gathers metrics using three primary source tiers:
 - A live response from the current refresh cycle always takes precedence over cached historical readings.
 - If a source answers with an empty bucket list while another source has metrics, the source with metrics takes precedence.
 - If Orca reports a non-standard window length, QuotaGlass overrides it with the vendor window definition from Direct readings when present.
-- `settings.json` can hold per-account overrides: pin one source, or turn off sources, for one account. v0.1.0 has no UI for these overrides.
+- Per-account overrides live in `settings.json`: pin one source, or turn off sources, for one account. To pin a source, open the account's detail window and choose under **Source** (shown when two or more sources read the account; **Auto** removes the pin). Turning off a source for one account has no UI; edit `settings.json`.
+- A pin to a source that no longer reads the account is ignored; the card falls back to the normal order and stays on the board.
 
 ## Account Merging by Email
 

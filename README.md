@@ -48,6 +48,8 @@ If two sources report the same account, QuotaGlass shows one card. It uses the e
 
 You can turn off each source in **Settings > Sources**.
 
+When two or more sources read the same account, QuotaGlass picks one in this order: direct, Orca, OMP. To use a different source for one account, click its card and choose under **Source**. Choose **Auto** to go back to the normal order.
+
 ## Accounts that QuotaGlass cannot read
 
 | You use only... | Result |

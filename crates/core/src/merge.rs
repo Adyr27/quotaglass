@@ -70,7 +70,13 @@ pub fn build(
     let mut cards: Vec<AccountView> = Vec::new();
     for (id, per_source) in &last.0 {
         let disabled = overrides.disabled.get(id).map(Vec::as_slice).unwrap_or(&[]);
-        let pinned = overrides.pinned.get(id).copied();
+        // A pin to a source that no longer knows this account is ignored; otherwise the card (and the only way
+        // to clear the pin) would disappear.
+        let pinned = overrides
+            .pinned
+            .get(id)
+            .copied()
+            .filter(|p| per_source.contains_key(p));
         let allowed = |k: &SourceKind| !disabled.contains(k) && pinned.is_none_or(|p| p == *k);
         let live_here = live.get(id).map(Vec::as_slice).unwrap_or(&[]);
 
@@ -104,7 +110,9 @@ pub fn build(
         let failure = (!fresh)
             .then(|| latest_error(outcomes, reading.source, reading.key.service))
             .flatten();
-        cards.push(card(&reading, failure, connectable, refresh_secs, now_ms));
+        let mut view = card(&reading, failure, connectable, refresh_secs, now_ms);
+        view.sources = per_source.keys().copied().collect();
+        cards.push(view);
     }
 
     // 3. A single-service source failed and nothing else knows that service: show why.
@@ -123,6 +131,7 @@ pub fn build(
             label: format!("{} (CLI login)", display_name(service)),
             plan: None,
             source: Some(o.kind),
+            sources: vec![],
             freshness: Freshness::Stale,
             age_secs: None,
             headline: None,
@@ -226,6 +235,7 @@ fn card(
         label: r.label.clone(),
         plan: r.plan.clone(),
         source: Some(r.source),
+        sources: vec![],
         freshness: headline
             .as_ref()
             .map(|h| h.freshness)
@@ -400,6 +410,31 @@ mod tests {
             &ov,
         );
         assert_eq!(cards[0].source, Some(SourceKind::Orca));
+        assert_eq!(cards[0].sources, vec![SourceKind::Direct, SourceKind::Orca]);
+    }
+
+    #[test]
+    fn pin_to_a_source_without_this_account_is_ignored() {
+        let mut last = LastReadings::default();
+        let mut ov = Overrides::default();
+        ov.pinned
+            .insert("claude:user@example.com".into(), SourceKind::Omp);
+        let cards = run(
+            &[ok(
+                SourceKind::Direct,
+                vec![reading(
+                    Service::Claude,
+                    E,
+                    "d",
+                    SourceKind::Direct,
+                    &[10.0],
+                )],
+            )],
+            &mut last,
+            &ov,
+        );
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].source, Some(SourceKind::Direct));
     }
 
     #[test]

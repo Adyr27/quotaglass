@@ -34,16 +34,22 @@ Result: 0 Critical, 0 High. The review found 6 Medium and 9 Low findings. All Me
 - RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g (`glib` 0.18.5) and RUSTSEC-2024-0370 (`proc-macro-error`, unmaintained): Linux GTK dependencies of Tauri. `cargo tree --target x86_64-pc-windows-msvc` shows neither one in the Windows build.
 - Secrets scan: 180 matches. All of them are in `node_modules`, `target` or the test fixtures. The two fixtures (`claude_credentials.json`, `codex_auth.json`) hold `SYNTHETIC` tokens and unsigned (`alg: none`) JWTs for `user@example.com`.
 
+## Risks handled after the audit
+
+- `cargo audit`: CI runs it on every push (run 42412499756: pass, warnings only for the two advisories above). The tool binary is now cached, version 0.22.2; the advisory database is fetched fresh each run.
+- Parser robustness: `crates/core/tests/mutation.rs` mutates every vendor, Orca and login-file fixture 3 000 times (by JSON structure and by raw bytes). No panic, no integer overflow in the debug build, and no accepted reading with a percent outside 0-100. This is a deterministic mutation test, not coverage-guided fuzzing.
+- Scanner binaries: the Sigstore bundles are `cosign sign-blob` signatures, which `gh attestation verify` cannot check. Checked instead: the signed digest matches each zip's SHA-256, and the signing certificate names `ghostsecurity/poltergeist` `release.yml@refs/tags/v2.0.5` and `ghostsecurity/wraith` `release.yml@refs/tags/v2.0.2`, issued by `sigstore-intermediate`, with one transparency-log entry each.
+- Stale source pin: a pin to a source that no longer reads the account is now ignored (test `pin_to_a_source_without_this_account_is_ignored`), so a pin cannot hide a card.
+- CI actions moved to Node 24 versions: `actions/checkout@v7`, `actions/setup-node@v7`, `actions/cache@v6`, `actions/attest-build-provenance@v4`. All are first-party GitHub actions.
+
 ## Not checked
 
-- `cargo audit` is not installed. wraith covered `Cargo.lock` instead.
-- No fuzzing of the JSON parsers.
-- No full Sigstore chain verification of the scanner binaries (no cosign on this PC).
+- The signature math on the scanner bundles (no cosign on this PC). Only digest and signer identity were checked.
 - The Orca-managed account format, because no managed account exists on the test PC.
 
 ## Evidence
 
-- `cargo test --workspace`: 86 passed, 0 failed.
+- `cargo test --workspace`: 91 passed, 0 failed (includes the 4 mutation tests and the stale-pin test).
 - `cargo clippy --workspace --all-targets -- -D warnings`: clean. `cargo fmt --all --check`: clean. `npm run build`: built.
 - `npm audit --omit=dev`: 0 vulnerabilities. wraith `package-lock.json`: no issues. wraith `Cargo.lock`: the 3 advisories above, all outside the Windows build.
 - `npx cc-safety-net status`: ready.

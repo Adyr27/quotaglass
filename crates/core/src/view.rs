@@ -40,6 +40,8 @@ pub struct AccountView {
     pub label: String,
     pub plan: Option<String>,
     pub source: Option<SourceKind>,
+    /// Every source that has a reading for this account, in priority order. Used by the source picker.
+    pub sources: Vec<SourceKind>,
     /// Freshness of the headline bucket; `Stale` when there is no headline.
     pub freshness: Freshness,
     pub age_secs: Option<u64>,

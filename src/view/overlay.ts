@@ -1,7 +1,7 @@
 // The all-limits dialog for one account. Focus stays inside while it is open.
 
 import { formatReset, formatWindow, metaLine, sentenceCase, usedRatio, usedWhole } from "../format";
-import type { AccountView } from "../types";
+import type { AccountView, SourceKind } from "../types";
 import { h, setText, show } from "./dom";
 
 const WARN_AT_PERCENT = 80;
@@ -11,23 +11,33 @@ export interface Overlay {
   readonly el: HTMLElement;
   /** Id of the account on show, or null when closed. */
   readonly openId: string | null;
-  open(view: AccountView, nowMs: number): void;
-  update(view: AccountView, nowMs: number): void;
+  open(view: AccountView, nowMs: number, pin: SourceKind | null): void;
+  update(view: AccountView, nowMs: number, pin: SourceKind | null): void;
   close(): void;
 }
 
-export function createOverlay(onClose: () => void): Overlay {
+const SOURCE_SHORT: Record<SourceKind, string> = { direct: "Direct", orca: "Orca", omp: "OMP", sessionKey: "Session key" };
+
+/** `onPin(id, null)` returns the account to automatic source choice. */
+export function createOverlay(onClose: () => void, onPin: (accountId: string, kind: SourceKind | null) => void): Overlay {
   let openId: string | null = null;
   let shown = "";
+  let pickerShown = "";
 
   const title = h("h2", { class: "dialog-title", id: "overlay-title" });
   const plan = h("span", { class: "pill" });
   const meta = h("p", { class: "dialog-meta" });
   const list = h("div", { class: "ov-list" });
+  const pickerGroup = h("div", { class: "seg", role: "radiogroup", "aria-labelledby": "overlay-source-label" });
+  const picker = h("div", { class: "set-row ov-source", hidden: true }, [
+    h("span", { id: "overlay-source-label" }, ["Source"]),
+    pickerGroup,
+  ]);
   const closeButton = h("button", { class: "btn", type: "button" }, ["Close"]);
   const dialog = h("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "overlay-title" }, [
     h("div", { class: "dialog-head" }, [title, plan]),
     meta,
+    picker,
     list,
     h("div", { class: "dialog-foot" }, [closeButton]),
   ]);
@@ -72,7 +82,39 @@ export function createOverlay(onClose: () => void): Overlay {
     ]);
   }
 
-  function paint(view: AccountView, nowMs: number): void {
+  // Source picker: shown only when more than one source knows the account. One tab stop; arrows move and select.
+  function paintPicker(view: AccountView, pin: SourceKind | null): void {
+    const choices: (SourceKind | null)[] = view.sources.length > 1 ? [null, ...view.sources] : [];
+    const key = JSON.stringify([view.id, choices, pin]);
+    if (key === pickerShown) return;
+    pickerShown = key;
+    show(picker, choices.length > 0);
+    const selected = Math.max(choices.indexOf(pin), 0);
+    const id = view.id;
+    const radios = choices.map((kind, index) =>
+      h(
+        "button",
+        { class: "seg-item", type: "button", role: "radio", "aria-checked": index === selected ? "true" : "false", tabindex: index === selected ? 0 : -1 },
+        [kind === null ? "Auto" : SOURCE_SHORT[kind]],
+      ),
+    );
+    radios.forEach((radio, index) => {
+      radio.addEventListener("click", () => onPin(id, choices[index]));
+      radio.addEventListener("keydown", (event) => {
+        const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+        if (step === 0) return;
+        event.preventDefault();
+        const next = (index + step + radios.length) % radios.length;
+        radios[next].focus();
+        onPin(id, choices[next]);
+      });
+    });
+    const hadFocus = pickerGroup.contains(document.activeElement);
+    pickerGroup.replaceChildren(...radios);
+    if (hadFocus && radios.length > 0) radios[selected].focus({ preventScroll: true });
+  }
+
+  function paint(view: AccountView, nowMs: number, pin: SourceKind | null): void {
     dialog.dataset.service = view.service;
     setText(title, view.label);
     const planText = view.plan === null ? "" : sentenceCase(view.plan);
@@ -81,6 +123,7 @@ export function createOverlay(onClose: () => void): Overlay {
     const metaText = metaLine({ resetsAtMs: null, source: view.source, freshness: view.freshness, ageSecs: view.ageSecs }, nowMs);
     setText(meta, metaText);
     show(meta, metaText !== "");
+    paintPicker(view, pin);
 
     // Rebuild the rows only when something on them changed, so a refresh does not replay the bars.
     const rowsKey = JSON.stringify([view.buckets, Math.floor(nowMs / 60_000)]);
@@ -94,19 +137,21 @@ export function createOverlay(onClose: () => void): Overlay {
     get openId() {
       return openId;
     },
-    open(view, nowMs) {
+    open(view, nowMs, pin) {
       openId = view.id;
       shown = "";
-      paint(view, nowMs);
+      pickerShown = "";
+      paint(view, nowMs, pin);
       show(el, true);
       closeButton.focus({ preventScroll: true });
     },
-    update(view, nowMs) {
-      if (openId === view.id) paint(view, nowMs);
+    update(view, nowMs, pin) {
+      if (openId === view.id) paint(view, nowMs, pin);
     },
     close() {
       openId = null;
       shown = "";
+      pickerShown = "";
       show(el, false);
     },
   };

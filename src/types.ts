@@ -27,6 +27,8 @@ export interface AccountView {
   label: string;
   plan: string | null;
   source: SourceKind | null;
+  /** Every source with a reading for this account, in priority order. */
+  sources: SourceKind[];
   freshness: Freshness;
   ageSecs: number | null;
   headline: BucketView | null;

@@ -592,6 +592,18 @@ button:focus-visible {
   justify-content: space-between;
 }
 
+/* The overlay is narrow: label above, segments across the full width. */
+.ov-source {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.ov-source .seg-item {
+  min-width: 0;
+  padding-inline: 4px;
+}
+
 .src-text {
   flex: 1;
   min-width: 0;

@@ -1,0 +1,10 @@
+{
+  "OPENAI_API_KEY": null,
+  "tokens": {
+    "id_token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJleHAiOjE4OTM0NTYwMDAsInN1YiI6InVzZXItU1lOVEhFVElDMDAwMSJ9.sig",
+    "access_token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjE4OTM0NTYwMDAsInN1YiI6InVzZXItU1lOVEhFVElDMDAwMSJ9.sig",
+    "refresh_token": "SYNTHETIC-refresh-token",
+    "account_id": "00000000-0000-0000-0000-000000000003"
+  },
+  "last_refresh": "2026-11-01T00:00:00Z"
+}

@@ -1,0 +1,74 @@
+{
+  "ok": true,
+  "result": {
+    "codex": { "systemDefault": { "email": "codex@example.com", "workspaceLabel": "Personal (Free)" } },
+    "rateLimits": {
+      "claude": {
+        "session": { "usedPercent": 9, "windowMinutes": 300, "resetsAt": 1794082200327 },
+        "weekly": { "usedPercent": 20, "windowMinutes": 10080, "resetsAt": 1794625200327 },
+        "updatedAt": 1794066856472,
+        "status": "ok",
+        "usageMetadata": { "account": { "email": "Claude@Example.com" } }
+      },
+      "codex": {
+        "session": { "usedPercent": 52, "windowMinutes": 300, "resetsAt": 1794962581000 },
+        "weekly": null,
+        "updatedAt": 1794066857505,
+        "status": "ok",
+        "usageMetadata": {}
+      },
+      "gemini": { "session": null, "weekly": null, "status": "unavailable", "error": "not signed in" },
+      "antigravity": {
+        "session": { "usedPercent": 10, "windowMinutes": 10080, "resetsAt": 1794651395000 },
+        "weekly": null,
+        "status": "ok"
+      },
+      "inactiveClaudeAccounts": [
+        {
+          "session": { "usedPercent": 3, "windowMinutes": 300, "resetsAt": 1794082200327 },
+          "weekly": { "usedPercent": 40, "windowMinutes": 10080, "resetsAt": 1794625200327 },
+          "updatedAt": 1794066000000,
+          "status": "ok",
+          "usageMetadata": { "account": { "email": "second@example.com" } }
+        },
+        { "session": { "usedPercent": "lots" }, "usageMetadata": { "account": { "email": "broken@example.com" } } },
+        "not an object",
+        { "session": { "usedPercent": 1, "windowMinutes": 300 }, "usageMetadata": {} }
+      ],
+      "inactiveCodexAccounts": [],
+      "antigravityAccounts": [
+        {
+          "accountId": "acc-1",
+          "email": "a@example.com",
+          "active": true,
+          "rateLimits": {
+            "session": { "usedPercent": 10, "windowMinutes": 10080, "resetsAt": 1794651395000 },
+            "weekly": null,
+            "buckets": [
+              {
+                "name": "Gemini Models · Weekly Limit Remaining",
+                "group": "Gemini Models",
+                "windowName": "Weekly Limit Remaining",
+                "usedPercent": 10,
+                "windowMinutes": 10080,
+                "resetsAt": 1794651395000
+              },
+              {
+                "name": "Claude and GPT models",
+                "group": "Claude and GPT models",
+                "windowName": "Claude and GPT models",
+                "usedPercent": 100,
+                "windowMinutes": 10080,
+                "resetsAt": 1794226381000
+              },
+              { "name": "Flash", "group": "Flash", "usedPercent": 5 }
+            ],
+            "updatedAt": 1794066861198,
+            "status": "ok"
+          }
+        },
+        { "accountId": "acc-3", "email": "c@example.com", "active": false, "rateLimits": null }
+      ]
+    }
+  }
+}

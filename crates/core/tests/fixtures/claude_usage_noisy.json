@@ -1,0 +1,26 @@
+{
+  "five_hour": {
+    "utilization": 10,
+    "resets_at": "2026-11-07T20:10:00.102452+00:00",
+    "future_field": { "nested": [1, 2, 3] }
+  },
+  "seven_day": {
+    "utilization": 21,
+    "resets_at": "2026-11-12T10:00:00.102452+00:00",
+    "label": "weekly"
+  },
+  "seven_day_note": "not a window",
+  "seven_day_flags": [1, 2, 3],
+  "seven_day_empty": {},
+  "seven_day_unmetered": { "utilization": null, "resets_at": null },
+  "some_new_window": { "utilization": 99, "resets_at": "2026-11-08T00:00:00+00:00" },
+  "extra_usage": {
+    "is_enabled": true,
+    "monthly_limit": 5000,
+    "used_credits": 12.5,
+    "utilization": 0.25
+  },
+  "spend": { "currency": "USD", "amount": 3 },
+  "tags": ["a", "b"],
+  "count": 7
+}

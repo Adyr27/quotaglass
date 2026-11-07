@@ -1,0 +1,15 @@
+{
+  "numStartups": 12,
+  "installMethod": "native",
+  "oauthAccount": {
+    "accountUuid": "00000000-0000-0000-0000-000000000001",
+    "emailAddress": "user@example.com",
+    "organizationUuid": "00000000-0000-0000-0000-000000000002",
+    "hasExtraUsageEnabled": false,
+    "displayName": "Example",
+    "claudeCodeTrialEndsAt": null
+  },
+  "projects": {
+    "C:/example/project": { "allowedTools": [], "history": [] }
+  }
+}

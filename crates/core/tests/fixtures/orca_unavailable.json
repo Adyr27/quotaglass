@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "result": {
+    "codex": { "systemDefault": { "email": "codex@example.com", "workspaceLabel": "Personal (Free)" } },
+    "rateLimits": {
+      "claude": { "session": null, "weekly": null, "status": "unavailable", "error": "not signed in" },
+      "codex": null,
+      "gemini": { "session": null, "weekly": null, "status": "unavailable", "error": "not signed in" },
+      "antigravity": null,
+      "inactiveClaudeAccounts": [],
+      "inactiveCodexAccounts": [],
+      "antigravityAccounts": []
+    }
+  }
+}

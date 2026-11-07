@@ -56,3 +56,6 @@ Result: 0 Critical, 0 High. The review found 6 Medium and 9 Low findings. All Me
 - Search of the repository for real emails, user paths and key prefixes: only the public GitHub handle in `LICENSE` and the bundle identifier.
 - Smoke run with real accounts: 5 cards and no duplicate card; the pin round-trip works; the 30-second rebuild was measured at 29 979 ms.
 - Resource use (debug build, 60 seconds): app working set 42.6 MB (9.4 MB private); CPU 0.08 s.
+- Resource use (release build, 60 seconds after a 15-second settle): app working set 62.7 MB (8.7 MB private); CPU 0.02 s. The 6 WebView2 child processes add 324.3 MB working set (159.3 MB private); working sets across processes count shared pages more than once.
+- Release installer: `QuotaGlass_0.1.0_x64-setup.exe`, 2.41 MiB (local `npm run tauri build`).
+- Source picker smoke (dev build, real accounts, CDP): pin Orca, arrow to OMP, back to Auto; settings and card source follow each step; picker hidden for a one-source account; no overflow at 360 px.

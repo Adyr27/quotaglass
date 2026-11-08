@@ -216,9 +216,8 @@ fn reading(
         .unwrap_or_else(|| format!("orca-{}", service.as_str()));
     Some(Reading {
         key: AccountKey::new(service, email, local_id),
-        label: email
-            .map(str::to_string)
-            .unwrap_or_else(|| "Antigravity (Orca)".to_string()),
+        // Never the email: a label is shown on screen. The email only keys the account.
+        label: "Antigravity".to_string(),
         plan: None,
         buckets,
         source: SourceKind::Orca,
@@ -307,11 +306,11 @@ mod tests {
         NOW
     }
 
-    fn by_label<'a>(readings: &'a [Reading], label: &str) -> &'a Reading {
+    fn by_id<'a>(readings: &'a [Reading], local_id: &str) -> &'a Reading {
         readings
             .iter()
-            .find(|r| r.label == label)
-            .unwrap_or_else(|| panic!("no reading labelled {label}"))
+            .find(|r| r.key.local_id == local_id)
+            .unwrap_or_else(|| panic!("no reading with id {local_id}"))
     }
 
     #[test]
@@ -328,6 +327,24 @@ mod tests {
     }
 
     #[test]
+    fn orca_label_is_never_email() {
+        let readings = parse_list(LIST.as_bytes(), NOW).unwrap();
+        assert!(!readings.is_empty());
+        for r in &readings {
+            assert_eq!(r.label, "Antigravity");
+            assert!(!r.label.contains('@'));
+            assert_eq!(r.plan, None);
+        }
+        // The email still keys the account, so it merges with the app source.
+        assert_eq!(
+            by_id(&readings, "acc-1").key.email.as_deref(),
+            Some("a@example.com")
+        );
+        let no_email = br#"{"ok":true,"result":{"rateLimits":{"antigravityAccounts":[{"accountId":"z","rateLimits":null}]}}}"#;
+        assert_eq!(parse_list(no_email, NOW).unwrap()[0].label, "Antigravity");
+    }
+
+    #[test]
     fn orca_service_is_antigravity() {
         assert_eq!(Orca::new().service(), Some(Service::Antigravity));
     }
@@ -341,7 +358,7 @@ mod tests {
     #[test]
     fn orca_null_ratelimits_gives_empty_reading() {
         let readings = parse_list(LIST.as_bytes(), NOW).unwrap();
-        let empty = by_label(&readings, "c@example.com");
+        let empty = by_id(&readings, "acc-3");
         assert!(empty.buckets.is_empty());
         assert_eq!(
             empty.key,
@@ -354,7 +371,7 @@ mod tests {
     #[test]
     fn orca_antigravity_bucket_names() {
         let readings = parse_list(LIST.as_bytes(), NOW).unwrap();
-        let acc = by_label(&readings, "a@example.com");
+        let acc = by_id(&readings, "acc-1");
         let names: Vec<&str> = acc.buckets.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(
             names,

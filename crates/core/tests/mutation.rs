@@ -1,10 +1,10 @@
 //! Mutation tests for every parser that reads data QuotaGlass does not control (vendor endpoints, Orca output,
-//! login files). Each fixture is mutated thousands of times, by JSON structure and by raw bytes. A parser may
+//! login files, process lists). Each fixture is mutated thousands of times, by JSON structure and by raw bytes. A parser may
 //! reject the input, but it must never panic (debug builds also panic on integer overflow), and a reading it
 //! accepts must hold only finite percentages from 0 to 100.
 
-use quotaglass_core::sources::{claude_direct, codex_direct, orca};
-use quotaglass_core::{AccountKey, Reading, Service};
+use quotaglass_core::sources::{antigravity_app, claude_direct, codex_direct, orca};
+use quotaglass_core::{AccountKey, Reading, Service, SourceKind};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -204,6 +204,44 @@ fn orca_list_parser_survives_mutation() {
     run("orca_list.json", 0xA076_1D64_78BD_642F, |stdout| {
         orca::parse_list(stdout, NOW_MS).ok()
     });
+}
+
+#[test]
+fn antigravity_quota_parser_survives_mutation() {
+    for (i, name) in ["ag_quota_summary.json", "ag_quota_summary_snake.json"]
+        .into_iter()
+        .enumerate()
+    {
+        run(name, 0x2545_F491_4F6C_DD1D + i as u64, |body| {
+            antigravity_app::parse_quota_summary(body)
+                .ok()
+                .map(|buckets| {
+                    vec![Reading {
+                        key: key(Service::Antigravity),
+                        label: "Antigravity".into(),
+                        plan: None,
+                        buckets,
+                        source: SourceKind::AntigravityApp,
+                        observed_at_ms: NOW_MS,
+                        banked_resets: None,
+                    }]
+                })
+        });
+    }
+}
+
+#[test]
+fn antigravity_process_csv_parser_survives_mutation() {
+    let base = fixture("ag_processes.csv");
+    let mut rng = Rng(0x1B87_3593_CC9E_2D51);
+    for _ in 0..ROUNDS {
+        let input = mutate_bytes(&base, &mut rng);
+        let pids = antigravity_app::parse_process_csv(&String::from_utf8_lossy(&input));
+        let mut unique = pids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), pids.len(), "repeated PID");
+    }
 }
 
 /// A per-process scratch folder; removed when the test ends.

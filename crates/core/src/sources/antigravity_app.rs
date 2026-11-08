@@ -1,17 +1,21 @@
 //! The running Antigravity app: quota from its language server on a loopback port.
 //!
-//! Method based on the open-source `ai-usagebar` 1.41.0 (`antigravity/fetch.rs`): find the app processes with
-//! `tasklist`, find their loopback listening ports with `netstat`, read the CSRF token from the server's own page
-//! (`GET /`), then `POST` `GetUserStatus` and `RetrieveUserQuotaSummary`. Field names must be verified against the
-//! live IDE. This source only contacts `127.0.0.1`. It never reads a Google login, a token store or Windows
-//! Credential Manager, and it never calls a Google endpoint. Response bodies and the CSRF token are never logged.
+//! Method based on the open-source `ai-usagebar` 1.41.0 (`antigravity/fetch.rs`): find the app's language-server
+//! processes with one hidden PowerShell CIM query, find their loopback listening ports with `netstat`, read the CSRF
+//! token from the server's own page (`GET /`), then `POST` `GetUserStatus` and `RetrieveUserQuotaSummary`. Field
+//! names verified against the live Antigravity desktop app on 2026-11-08 (Windows 11). This source only contacts
+//! `127.0.0.1`. It never reads a Google login, a token store or Windows Credential Manager, and it never calls a
+//! Google endpoint. Response bodies and the CSRF token are never logged.
 
 use crate::env::Env;
-use crate::model::{checked_percent, AccountKey, Bucket, FetchError, Reading, Service, SourceKind};
+use crate::model::{
+    checked_percent, AccountKey, Bucket, FetchError, NetErrorKind, Reading, Service, SourceKind,
+};
 use crate::net::HttpClient;
 use crate::provider::{BoxFut, Provider};
 use serde_json::Value;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -19,15 +23,21 @@ use std::time::{Duration, Instant};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-/// Process images of the app and its language server, compared without case.
-const IMAGES: [&str; 3] = [
-    "Antigravity.exe",
-    "language_server.exe",
-    "language_server_windows_x64.exe",
-];
+/// Language-server images, compared without case. The app window (`Antigravity.exe`, also used by `agy` sidecars)
+/// is not one of them.
+const IMAGES: [&str; 2] = ["language_server.exe", "language_server_windows_x64.exe"];
+/// Folder that must appear in the executable path (compared without case), so a Windsurf or Codeium language
+/// server is never read as Antigravity.
+const APP_FOLDER: &str = r"\antigravity\";
+/// PIDs and executable paths of language-server processes, as CSV.
+const PROCESS_QUERY: &str =
+    "Get-CimInstance Win32_Process -Filter \"Name LIKE 'language_server%'\" \
+     | Select-Object ProcessId,ExecutablePath | ConvertTo-Csv -NoTypeInformation";
 const STATUS_PATH: &str = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
 const QUOTA_PATH: &str = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
 const TOOL_TIMEOUT: Duration = Duration::from_secs(5);
+/// Upper bound on one whole `fetch`: process discovery plus every port.
+const FETCH_BUDGET: Duration = Duration::from_secs(15);
 const MAX_STDOUT: usize = 4 * 1024 * 1024;
 /// Upper bound on JSON nodes visited by the best-effort user-status search.
 const SEARCH_BUDGET: usize = 10_000;
@@ -45,13 +55,13 @@ impl Provider for AntigravityApp {
         Some(Service::Antigravity)
     }
 
-    /// Runs `tasklist` once (hidden, blocking, at most 5 s). Nothing is cached.
+    /// Always true: finding the process spawns PowerShell (up to 5 s), so it runs in `fetch`, off the caller's thread.
     fn detect(&self, _env: &Env) -> bool {
-        app_pids().is_ok_and(|pids| !pids.is_empty())
+        true
     }
 
     fn fetch<'a>(&'a self, env: &'a Env) -> BoxFut<'a, Result<Vec<Reading>, FetchError>> {
-        Box::pin(async move {
+        Box::pin(within(FETCH_BUDGET, async move {
             let ports = tokio::task::spawn_blocking(|| -> Result<Vec<u16>, FetchError> {
                 let pids = app_pids()?;
                 if pids.is_empty() {
@@ -63,13 +73,26 @@ impl Provider for AntigravityApp {
             .await
             .map_err(|_| FetchError::Unavailable("process list could not be read"))??;
             read_ports(&env.http, &ports, (env.now_ms)()).await
-        })
+        }))
     }
 }
 
+/// `fut`, or `Timeout` once `budget` has passed.
+async fn within<T>(
+    budget: Duration,
+    fut: impl Future<Output = Result<T, FetchError>>,
+) -> Result<T, FetchError> {
+    tokio::time::timeout(budget, fut)
+        .await
+        .unwrap_or(Err(FetchError::Timeout))
+}
+
 fn app_pids() -> Result<Vec<u32>, FetchError> {
-    let csv = run_hidden(system_tool("tasklist.exe"), &["/fo", "csv", "/nh"])?;
-    Ok(parse_tasklist(&csv))
+    let csv = run_hidden(
+        system_tool(r"WindowsPowerShell\v1.0\powershell.exe"),
+        &["-NoProfile", "-NonInteractive", "-Command", PROCESS_QUERY],
+    )?;
+    Ok(parse_process_csv(&csv))
 }
 
 /// `%SystemRoot%\System32\<name>`, so a program of the same name on PATH is never run instead.
@@ -122,7 +145,8 @@ fn run_hidden(program: PathBuf, args: &[&str]) -> Result<String, FetchError> {
 }
 
 /// Tries each port in order; the first that returns buckets wins. A port that answers with a quota body this parser
-/// cannot read is remembered as a `Format` error, so a changed response shape is not reported as "not found".
+/// cannot read (`Format`) or that refuses a call (HTTP 401 or 403) is remembered, so a changed response shape or a
+/// signed-out app is not reported as "not found".
 async fn read_ports(
     http: &HttpClient,
     ports: &[u16],
@@ -142,7 +166,9 @@ async fn read_ports(
                     banked_resets: None,
                 }]);
             }
-            Err(e @ FetchError::Format(_)) => last = e,
+            Err(
+                e @ (FetchError::Format(_) | FetchError::Network(NetErrorKind::Status(401 | 403))),
+            ) => last = e,
             Err(_) => {}
         }
     }
@@ -155,9 +181,9 @@ async fn read_port(http: &HttpClient, port: u16) -> Result<PortReading, FetchErr
     // A port that refuses or stalls on `GET /` is not the language server: skip it before two more requests.
     let csrf = match http.get_loopback(port, "/").await {
         Ok(page) => parse_csrf(&String::from_utf8_lossy(&page)),
-        Err(
-            e @ (FetchError::Timeout | FetchError::Network(crate::model::NetErrorKind::Connect)),
-        ) => return Err(e),
+        Err(e @ (FetchError::Timeout | FetchError::Network(NetErrorKind::Connect))) => {
+            return Err(e)
+        }
         Err(_) => None,
     };
     let (email, plan) = match http
@@ -165,6 +191,7 @@ async fn read_port(http: &HttpClient, port: u16) -> Result<PortReading, FetchErr
         .await
     {
         Ok(body) => parse_user_status(&body),
+        Err(e @ FetchError::Network(NetErrorKind::Status(401 | 403))) => return Err(e),
         Err(_) => (None, None),
     };
     let body = http
@@ -173,25 +200,33 @@ async fn read_port(http: &HttpClient, port: u16) -> Result<PortReading, FetchErr
     Ok((email, plan, parse_quota_summary(&body)?))
 }
 
-/// PIDs from `tasklist /fo csv /nh` whose image is one of `IMAGES`, in order, without repeats.
-pub fn parse_tasklist(csv: &str) -> Vec<u32> {
+/// PIDs from the `PROCESS_QUERY` CSV (`"ProcessId","ExecutablePath"`) whose file name is one of `IMAGES` and whose
+/// path contains `APP_FOLDER`, in order, without repeats. The header and rows without a path are skipped.
+pub fn parse_process_csv(csv: &str) -> Vec<u32> {
     let mut pids = Vec::new();
     for line in csv.lines() {
-        let Some(line) = line.trim().strip_prefix('"') else {
+        let Some((pid, path)) = line
+            .trim()
+            .strip_prefix('"')
+            .and_then(|l| l.split_once("\",\""))
+        else {
             continue;
         };
-        let mut fields = line.splitn(3, "\",\"");
-        let (Some(name), Some(pid)) = (fields.next(), fields.next()) else {
+        let Ok(pid) = pid.parse::<u32>() else {
             continue;
         };
-        let Ok(pid) = pid.trim_end_matches('"').parse::<u32>() else {
-            continue;
-        };
-        if IMAGES.iter().any(|i| name.eq_ignore_ascii_case(i)) && !pids.contains(&pid) {
+        let path = path.strip_suffix('"').unwrap_or(path);
+        if is_app_server(path) && !pids.contains(&pid) {
             pids.push(pid);
         }
     }
     pids
+}
+
+fn is_app_server(path: &str) -> bool {
+    let name = path.rsplit('\\').next().unwrap_or(path);
+    IMAGES.iter().any(|i| name.eq_ignore_ascii_case(i))
+        && path.to_ascii_lowercase().contains(APP_FOLDER)
 }
 
 /// Loopback (`127.0.0.1`) listening ports of `pids` from `netstat -ano -p tcp`, highest first, without repeats.
@@ -232,7 +267,8 @@ pub fn parse_csrf(html: &str) -> Option<String> {
     valid.then(|| token.to_string())
 }
 
-/// `groups[]` × `buckets[]` (also under a top-level `response`), camelCase or snake_case.
+/// `groups[]` × `buckets[]` (also under a top-level `response`), camelCase or snake_case. Disabled buckets are
+/// skipped. A bucket is named `"<group> · 5-hour"`, `"<group> · Weekly"` or `"<group> · <bucket displayName>"`.
 pub fn parse_quota_summary(body: &[u8]) -> Result<Vec<Bucket>, FetchError> {
     let root: Value =
         serde_json::from_slice(body).map_err(|_| FetchError::Format("quota summary"))?;
@@ -250,11 +286,14 @@ pub fn parse_quota_summary(body: &[u8]) -> Result<Vec<Bucket>, FetchError> {
             .into_iter()
             .flatten()
         {
-            let bucket_name = field(bucket, "displayName", "display_name")
-                .and_then(Value::as_str)
-                .ok_or(FetchError::Format("displayName"))?;
-            let remaining =
-                field(bucket, "remainingFraction", "remaining_fraction").and_then(Value::as_f64);
+            if bucket.get("disabled").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
+            // proto3 JSON omits a zero value, so a missing fraction means nothing is left.
+            let remaining = match field(bucket, "remainingFraction", "remaining_fraction") {
+                None | Some(Value::Null) => Some(0.0),
+                Some(v) => v.as_f64(),
+            };
             let used_percent =
                 checked_percent(remaining.map(|r| (1.0 - r) * 100.0), "remainingFraction")?;
             let resets_at_ms = match field(bucket, "resetTime", "reset_time") {
@@ -262,13 +301,18 @@ pub fn parse_quota_summary(body: &[u8]) -> Result<Vec<Bucket>, FetchError> {
                 Some(Value::String(s)) => Some(iso_to_ms(s)?),
                 Some(_) => return Err(FetchError::Format("resetTime")),
             };
-            let window_secs = match bucket.get("window").and_then(Value::as_str) {
-                Some("5h") => Some(18_000),
-                Some("weekly") => Some(604_800),
-                _ => None,
+            let (window_secs, name) = match bucket.get("window").and_then(Value::as_str) {
+                Some("5h") => (Some(18_000), format!("{group_name} · 5-hour")),
+                Some("weekly") => (Some(604_800), format!("{group_name} · Weekly")),
+                _ => {
+                    let bucket_name = field(bucket, "displayName", "display_name")
+                        .and_then(Value::as_str)
+                        .ok_or(FetchError::Format("displayName"))?;
+                    (None, format!("{group_name} · {bucket_name}"))
+                }
             };
             out.push(Bucket {
-                name: format!("{group_name} · {bucket_name}"),
+                name,
                 used_percent,
                 window_secs,
                 resets_at_ms,
@@ -357,7 +401,7 @@ mod tests {
         };
     }
 
-    const TASKLIST: &str = fixture!("ag_tasklist.csv");
+    const PROCESSES: &str = fixture!("ag_processes.csv");
     const NETSTAT: &str = fixture!("ag_netstat.txt");
     const NETSTAT_2: &str = fixture!("ag_netstat_2.txt");
     const QUOTA: &str = fixture!("ag_quota_summary.json");
@@ -365,18 +409,22 @@ mod tests {
     const NOW: i64 = 1_794_150_000_000;
 
     #[test]
-    fn tasklist_finds_ide_pids() {
-        assert_eq!(parse_tasklist(TASKLIST), vec![7852, 12000, 956, 10144]);
-        assert!(parse_tasklist("").is_empty());
-        assert!(
-            parse_tasklist("INFO: No tasks are running which match the specified criteria.")
-                .is_empty()
-        );
+    fn process_csv_filters_by_name_and_path() {
+        let csv = r#""ProcessId","ExecutablePath"
+"12000","C:\Users\u\AppData\Local\Programs\antigravity\resources\bin\language_server.exe"
+"23000","C:\Users\u\AppData\Local\Programs\Windsurf\resources\bin\language_server_windows_x64.exe"
+"956","C:\Users\u\AppData\Local\Programs\antigravity\Antigravity.exe"
+"#;
+        assert_eq!(parse_process_csv(csv), vec![12000]);
+        // Case-insensitive name and folder; empty, renamed and look-alike paths are rejected; no repeats.
+        assert_eq!(parse_process_csv(PROCESSES), vec![12000, 7852]);
+        assert!(parse_process_csv("").is_empty());
+        assert!(parse_process_csv(r#""ProcessId","ExecutablePath""#).is_empty());
     }
 
     #[test]
     fn netstat_ranks_loopback_ports() {
-        let pids = parse_tasklist(TASKLIST);
+        let pids = parse_process_csv(PROCESSES);
         assert_eq!(parse_netstat(NETSTAT, &pids), vec![62294, 54366]);
         assert_eq!(parse_netstat(NETSTAT, &[19328]), vec![6463]);
         assert!(parse_netstat(NETSTAT, &[]).is_empty());
@@ -390,7 +438,7 @@ mod tests {
 
     #[test]
     fn ports_change_between_calls_is_rediscovered() {
-        let pids = parse_tasklist(TASKLIST);
+        let pids = parse_process_csv(PROCESSES);
         assert_eq!(parse_netstat(NETSTAT, &pids)[0], 62294);
         assert_eq!(parse_netstat(NETSTAT_2, &pids), vec![63001, 62294]);
     }
@@ -428,14 +476,79 @@ mod tests {
         assert_eq!(b.window_secs, Some(604_800));
         assert_eq!(b.resets_at_ms, None);
 
+        // The disabled bucket is skipped; this one omits `remainingFraction` (proto3 drops a zero).
         let b = &camel[2];
         assert_eq!(b.name, "Claude and GPT · 5-hour");
         assert_eq!(b.used_percent, 100.0);
         assert_eq!(b.resets_at_ms, Some(1_794_162_600_500));
 
         let b = &camel[3];
+        assert_eq!(b.name, "Claude and GPT · Pool");
         assert_eq!(b.window_secs, None);
         assert_eq!(b.used_percent, 25.0);
+    }
+
+    fn one_bucket(bucket: &str) -> Result<Vec<Bucket>, FetchError> {
+        let body =
+            format!(r#"{{"groups":[{{"displayName":"Gemini 4 Argon","buckets":[{bucket}]}}]}}"#);
+        parse_quota_summary(body.as_bytes())
+    }
+
+    #[test]
+    fn missing_remaining_fraction_is_fully_used() {
+        for bucket in [
+            r#"{"displayName":"X","window":"5h"}"#,
+            r#"{"displayName":"X","window":"5h","remainingFraction":null}"#,
+            r#"{"displayName":"X","window":"5h","remaining_fraction":0}"#,
+        ] {
+            assert_eq!(
+                one_bucket(bucket).unwrap()[0].used_percent,
+                100.0,
+                "{bucket}"
+            );
+        }
+        assert_eq!(
+            one_bucket(r#"{"displayName":"X","remainingFraction":"half"}"#),
+            Err(FetchError::Format("remainingFraction"))
+        );
+    }
+
+    #[test]
+    fn disabled_buckets_are_skipped() {
+        let both = r#"{"displayName":"A","disabled":true,"remainingFraction":0.1},
+            {"displayName":"B","disabled":false,"remainingFraction":0.9}"#;
+        let buckets = one_bucket(both).unwrap();
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].name, "Gemini 4 Argon · B");
+        assert_eq!(
+            one_bucket(r#"{"displayName":"A","disabled":true}"#),
+            Err(FetchError::Format("no buckets"))
+        );
+    }
+
+    #[test]
+    fn bucket_names_use_the_window() {
+        let name = |bucket: &str| one_bucket(bucket).unwrap()[0].name.clone();
+        assert_eq!(
+            name(
+                r#"{"displayName":"Gemini 4 Argon 5-Hour Limit","window":"5h","remainingFraction":1}"#
+            ),
+            "Gemini 4 Argon · 5-hour"
+        );
+        assert_eq!(
+            name(
+                r#"{"displayName":"Gemini 4 Argon Weekly Limit","window":"weekly","remainingFraction":1}"#
+            ),
+            "Gemini 4 Argon · Weekly"
+        );
+        assert_eq!(
+            name(r#"{"displayName":"Monthly Pool","window":"monthly","remainingFraction":1}"#),
+            "Gemini 4 Argon · Monthly Pool"
+        );
+        assert_eq!(
+            one_bucket(r#"{"window":"monthly","remainingFraction":1}"#),
+            Err(FetchError::Format("displayName"))
+        );
     }
 
     #[test]
@@ -567,5 +680,55 @@ mod tests {
         );
         let req = server.last_request.lock().unwrap().to_ascii_lowercase();
         assert!(!req.contains("x-codeium-csrf-token"));
+    }
+
+    #[tokio::test]
+    async fn auth_failure_is_kept_as_last_error() {
+        let page = || {
+            (
+                200,
+                "",
+                r#"<script>{"csrfToken":"tok-1"}</script>"#.to_string(),
+            )
+        };
+        let http = HttpClient::new().unwrap();
+        // 401 on the status call.
+        let server = MockServer::start(vec![page(), (401, "", String::new())]);
+        assert_eq!(
+            read_ports(&http, &[port_of(&server)], NOW).await,
+            Err(FetchError::Network(NetErrorKind::Status(401)))
+        );
+        // 403 on the quota call, and a later closed port does not replace it.
+        let server = MockServer::start(vec![
+            page(),
+            (200, "", "{}".to_string()),
+            (403, "", String::new()),
+        ]);
+        assert_eq!(
+            read_ports(&http, &[port_of(&server), closed_port()], NOW).await,
+            Err(FetchError::Network(NetErrorKind::Status(403)))
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_budget_ends_in_timeout() {
+        let stalled = std::future::pending::<Result<(), FetchError>>();
+        assert_eq!(
+            within(Duration::from_millis(50), stalled).await,
+            Err(FetchError::Timeout)
+        );
+        assert_eq!(within(Duration::from_secs(1), async { Ok(7) }).await, Ok(7));
+    }
+
+    #[test]
+    fn detect_is_cheap() {
+        let env = crate::env::test_env(
+            &std::env::temp_dir(),
+            HttpClient::for_test("http://127.0.0.1:9"),
+            || NOW,
+        );
+        let started = Instant::now();
+        assert!(AntigravityApp.detect(&env));
+        assert!(started.elapsed() < Duration::from_millis(50));
     }
 }

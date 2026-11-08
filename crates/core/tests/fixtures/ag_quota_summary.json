@@ -6,16 +6,17 @@
         "displayName": "Gemini",
         "description": "Gemini models",
         "buckets": [
-          { "bucketId": "g-5h", "displayName": "5-hour", "description": "", "window": "5h", "remainingFraction": 0.38, "resetTime": "2026-11-08T17:00:00Z" },
-          { "bucketId": "g-wk", "displayName": "Weekly", "window": "weekly", "remainingFraction": 1, "resetTime": null }
+          { "bucketId": "g-5h", "displayName": "Gemini 5-Hour Limit", "description": "", "window": "5h", "remainingFraction": 0.38, "resetTime": "2026-11-08T17:00:00Z" },
+          { "bucketId": "g-wk", "displayName": "Gemini Weekly Limit", "window": "weekly", "remainingFraction": 1, "resetTime": null }
         ]
       },
       {
         "displayName": "Claude and GPT",
         "description": "Partner models",
         "buckets": [
-          { "bucketId": "c-5h", "displayName": "5-hour", "disabled": true, "window": "5h", "remainingFraction": 0, "resetTime": "2026-11-08T18:30:00.500+00:00" },
-          { "bucketId": "c-pool", "displayName": "Pool", "window": "monthly", "remainingFraction": 0.75 }
+          { "bucketId": "c-old", "displayName": "Old Limit", "disabled": true, "window": "5h", "remainingFraction": 0.5 },
+          { "bucketId": "c-5h", "displayName": "Claude and GPT 5-Hour Limit", "window": "5h", "resetTime": "2026-11-08T18:30:00.500+00:00" },
+          { "bucketId": "c-pool", "displayName": "Pool", "disabled": false, "window": "monthly", "remainingFraction": 0.75 }
         ]
       }
     ]

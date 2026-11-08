@@ -110,6 +110,9 @@ export interface Detected {
   orca: boolean;
 }
 
+/** A page the app may open in the browser. The UI names it; the app holds the URL. */
+export type UrlTarget = "openAiUsage" | "orca";
+
 export interface BackdropPayload {
   acrylic: boolean;
 }

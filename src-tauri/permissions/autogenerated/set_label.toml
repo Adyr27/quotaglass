@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-label"
+description = "Enables the set_label command without any pre-configured scope."
+commands.allow = ["set_label"]
+
+[[permission]]
+identifier = "deny-set-label"
+description = "Denies the set_label command without any pre-configured scope."
+commands.deny = ["set_label"]

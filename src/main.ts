@@ -2,6 +2,7 @@
 
 import {
   connect,
+  openCli,
   detect,
   getSettings,
   getSnapshot,
@@ -55,7 +56,8 @@ const problem = h("p", { class: "problem", role: "status", hidden: true });
 const board = createBoard({
   onOpen: (accountId, from) => openOverlay(accountId, from),
   onRetry: () => void refresh(),
-  onSignIn: (service) => void connect(service),
+  // A current login renews through the vendor's sign-in; an added account opens its CLI with its own profile.
+  onSignIn: (account) => void (account.profileId === null ? connect(account.service) : openCli(account.id)),
   onToggleService: (service) => toggleIn("hiddenServices", service),
   onToggleGroup: (service) => toggleIn("collapsed", service),
 });

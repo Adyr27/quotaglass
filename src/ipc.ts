@@ -3,7 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { BackdropPayload, Detected, Service, Settings, SettingsPatch, Snapshot } from "./types";
+import type { BackdropPayload, Connection, Detected, Service, Settings, SettingsPatch, Snapshot, UrlTarget } from "./types";
 
 export type Result<T> = { ok: true; value: T } | { ok: false };
 
@@ -83,6 +83,38 @@ export function updateSettings(patch: SettingsPatch): Promise<Result<Settings>> 
 
 export function connect(service: Service): Promise<Result<void>> {
   return call<void>("connect", "Could not open the sign-in window.", { service });
+}
+
+export function addAccount(service: Service): Promise<Result<Settings>> {
+  return call<Settings>("add_account", "Could not add the account.", { service });
+}
+
+export function openCli(accountId: string): Promise<Result<void>> {
+  return call<void>("open_cli", "Could not open the console.", { accountId });
+}
+
+export function removeAccount(accountId: string): Promise<Result<Settings>> {
+  return call<Settings>("remove_account", "Could not remove the account.", { accountId });
+}
+
+export function setHidden(accountId: string, hidden: boolean): Promise<Result<Settings>> {
+  return call<Settings>("set_hidden", "Could not change that account.", { accountId, hidden });
+}
+
+export function setPinned(accountId: string, pinned: boolean): Promise<Result<Settings>> {
+  return call<Settings>("set_pinned", "Could not change the pin.", { accountId, pinned });
+}
+
+export function setLabel(accountId: string, label: string | null): Promise<Result<Settings>> {
+  return call<Settings>("set_label", "Could not save the name.", { accountId, label });
+}
+
+export function connectSource(conn: Connection, on: boolean): Promise<Result<Settings>> {
+  return call<Settings>("connect_source", "Could not change that source.", { conn, on });
+}
+
+export function openUrl(target: UrlTarget): Promise<Result<void>> {
+  return call<void>("open_url", "Could not open the browser.", { target });
 }
 
 async function subscribe<T>(event: string, handler: (payload: T) => void): Promise<void> {

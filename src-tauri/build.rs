@@ -7,6 +7,14 @@ fn main() {
         "get_settings",
         "update_settings",
         "connect",
+        "add_account",
+        "open_cli",
+        "remove_account",
+        "set_hidden",
+        "set_pinned",
+        "set_label",
+        "connect_source",
+        "open_url",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

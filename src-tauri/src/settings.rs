@@ -7,7 +7,7 @@ use std::io;
 use std::path::PathBuf;
 
 pub const SETTINGS_VERSION: u32 = 2;
-const MAX_PINNED: usize = 4;
+pub const MAX_PINNED: usize = 4;
 const MAX_LABEL_CHARS: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,7 +142,60 @@ impl Settings {
         self.clamp();
     }
 
-    fn clamp(&mut self) {
+    /// Pins or unpins one card. Pinning a fifth card is refused; unpinning is always allowed.
+    pub fn set_pinned(&mut self, account_id: &str, pinned: bool) -> Result<(), &'static str> {
+        let has = self.pinned_accounts.iter().any(|p| p == account_id);
+        if !pinned {
+            self.pinned_accounts.retain(|p| p != account_id);
+        } else if !has {
+            if self.pinned_accounts.len() >= MAX_PINNED {
+                return Err("Pin up to 4 accounts");
+            }
+            self.pinned_accounts.push(account_id.to_string());
+        }
+        Ok(())
+    }
+
+    pub fn set_hidden(&mut self, account_id: &str, hidden: bool) {
+        self.hidden_accounts.retain(|h| h != account_id);
+        if hidden {
+            self.hidden_accounts.push(account_id.to_string());
+        }
+    }
+
+    /// `None` or a blank label clears it; `clamp` trims the rest to 40 characters.
+    pub fn set_label(&mut self, account_id: &str, label: Option<String>) {
+        match label {
+            Some(l) if !l.trim().is_empty() => {
+                self.labels.insert(account_id.to_string(), l);
+            }
+            _ => {
+                self.labels.remove(account_id);
+            }
+        }
+    }
+
+    pub fn set_connected(&mut self, conn: Connection, on: bool) {
+        self.connected.retain(|c| *c != conn);
+        if on {
+            self.connected.push(conn);
+        }
+    }
+
+    /// Drops an added account. `forget_card` also drops the card's pin, hidden flag and label: false when the card
+    /// stays on screen through the current login.
+    pub fn forget_added(&mut self, profile_id: &str, account_id: &str, forget_card: bool) {
+        self.added_accounts.retain(|a| a.id != profile_id);
+        let mut ids = vec![profile_id];
+        if forget_card {
+            ids.push(account_id);
+        }
+        self.pinned_accounts.retain(|p| !ids.contains(&p.as_str()));
+        self.hidden_accounts.retain(|h| !ids.contains(&h.as_str()));
+        self.labels.retain(|k, _| !ids.contains(&k.as_str()));
+    }
+
+    pub(crate) fn clamp(&mut self) {
         self.version = SETTINGS_VERSION;
         self.refresh_minutes = self.refresh_minutes.clamp(1, 5);
 
@@ -354,6 +407,60 @@ mod tests {
         assert_eq!(store.load(), Settings::default());
         assert!(dir.join("settings.json.bad").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pin_limit_enforced() {
+        let mut s = Settings::default();
+        for id in ["a", "b", "c", "d"] {
+            s.set_pinned(id, true).unwrap();
+        }
+        assert_eq!(s.set_pinned("e", true), Err("Pin up to 4 accounts"));
+        assert_eq!(
+            s.set_pinned("a", true),
+            Ok(()),
+            "pinning a pinned card is a no-op"
+        );
+        assert_eq!(s.pinned_accounts, ["a", "b", "c", "d"]);
+        s.set_pinned("b", false).unwrap();
+        s.set_pinned("e", true).unwrap();
+        assert_eq!(s.pinned_accounts, ["a", "c", "d", "e"]);
+        s.set_pinned("zz", false).unwrap();
+        assert_eq!(s.pinned_accounts.len(), 4);
+    }
+
+    #[test]
+    fn hidden_label_connected_and_forget() {
+        let mut s = Settings::default();
+        s.set_hidden("x", true);
+        s.set_hidden("x", true);
+        assert_eq!(s.hidden_accounts, ["x"]);
+        s.set_label("x", Some("Work".into()));
+        s.set_label("y", Some("  ".into()));
+        assert_eq!(s.labels.len(), 1);
+        s.set_connected(Connection::Orca, true);
+        s.set_connected(Connection::Orca, true);
+        assert_eq!(s.connected, [Connection::Orca]);
+        s.set_connected(Connection::Orca, false);
+        assert!(s.connected.is_empty());
+
+        s.added_accounts.push(AddedAccount {
+            id: "p1".into(),
+            service: Service::Claude,
+            profile_dir: PathBuf::from(r"C:\p\p1"),
+        });
+        s.pinned_accounts = vec!["x".into(), "p1".into()];
+        s.forget_added("p1", "x", false);
+        assert!(s.added_accounts.is_empty());
+        assert_eq!(s.pinned_accounts, ["x"], "the card stays: keep its pin");
+        assert_eq!(s.labels.get("x").map(String::as_str), Some("Work"));
+        s.forget_added("p1", "x", true);
+        assert!(
+            s.pinned_accounts.is_empty() && s.hidden_accounts.is_empty() && s.labels.is_empty()
+        );
+        s.set_label("x", Some("A".into()));
+        s.set_label("x", None);
+        assert!(s.labels.is_empty());
     }
 
     #[test]

@@ -8,7 +8,7 @@ import { h, iconChevron, setText, show, syncChildren } from "./dom";
 export interface BoardDeps {
   onOpen(accountId: string, opener: HTMLElement): void;
   onRetry(): void;
-  onSignIn(service: Service): void;
+  onSignIn(account: AccountView): void;
   onToggleService(service: Service): void;
   onToggleGroup(service: Service): void;
 }

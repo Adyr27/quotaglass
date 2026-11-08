@@ -2,7 +2,7 @@
 // so focus, hover and the bar animation survive a refresh.
 
 import { leftWhole, metaLine, sentenceCase, usedRatio } from "../format";
-import type { AccountView, Service } from "../types";
+import type { AccountView } from "../types";
 import { h, isVisible, setAttr, setText, show } from "./dom";
 
 export interface CardContext {
@@ -12,7 +12,7 @@ export interface CardContext {
   refreshing: boolean;
   onOpen(accountId: string, opener: HTMLElement): void;
   onRetry(): void;
-  onSignIn(service: Service): void;
+  onSignIn(account: AccountView): void;
 }
 
 export interface Card {
@@ -26,11 +26,16 @@ const WARN_AT_PERCENT = 80;
 const MAX_ENTER_STAGGER = 8;
 
 /**
- * An expired Claude or Codex current login can be renewed from the card. Sign-in runs the CLI on its
- * default folder, so an added account (profileId set) gets no button until sign-in knows profiles.
+ * An expired Claude or Codex login can be renewed from the card: a current login through the vendor's
+ * sign-in, an added account (profileId set) by opening its CLI with that profile.
  */
 function canSignIn(view: AccountView): boolean {
-  return view.state === "loginExpired" && view.currentLogin && view.profileId === null && view.service !== "antigravity";
+  return view.state === "loginExpired" && view.service !== "antigravity" && (view.currentLogin || view.profileId !== null);
+}
+
+function signInText(view: AccountView): string {
+  if (view.profileId === null) return "Sign in";
+  return view.service === "claude" ? "Open Claude" : "Open Codex";
 }
 
 export function createCard(enterIndex: number): Card {
@@ -85,7 +90,7 @@ export function createCard(enterIndex: number): Card {
     if (ctx !== null && !ctx.refreshing) ctx.onRetry();
   });
   signIn.addEventListener("click", () => {
-    if (ctx !== null && view !== null && canSignIn(view)) ctx.onSignIn(view.service);
+    if (ctx !== null && view !== null && canSignIn(view)) ctx.onSignIn(view);
   });
 
   function update(next: AccountView, nextCtx: CardContext): void {
@@ -155,6 +160,7 @@ export function createCard(enterIndex: number): Card {
     note.classList.toggle("is-warn", next.state === "error");
     show(actions, canRetry);
     show(signIn, canSignIn(next));
+    setText(signIn, signInText(next));
     show(foot, showNote || canRetry);
     retry.classList.toggle("is-disabled", nextCtx.refreshing);
     setAttr(retry, "aria-disabled", nextCtx.refreshing ? "true" : null);

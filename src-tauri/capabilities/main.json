@@ -10,9 +10,17 @@
     "core:window:allow-start-dragging",
     "allow-get-snapshot",
     "allow-refresh-now",
-    "allow-detect-sources",
+    "allow-detect",
     "allow-get-settings",
     "allow-update-settings",
-    "allow-connect"
+    "allow-connect",
+    "allow-add-account",
+    "allow-open-cli",
+    "allow-remove-account",
+    "allow-set-hidden",
+    "allow-set-pinned",
+    "allow-set-label",
+    "allow-connect-source",
+    "allow-open-url"
   ]
 }

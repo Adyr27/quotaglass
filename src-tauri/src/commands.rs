@@ -5,6 +5,7 @@ use crate::scheduler::{lock, Detected, Scheduler};
 use crate::settings::{AddedAccount, Connection, Settings, SettingsPatch, SettingsStore};
 use quotaglass_core::view::{AccountView, Snapshot};
 use quotaglass_core::Service;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
@@ -137,11 +138,36 @@ pub fn resolve_account(
     }
 }
 
-/// What Remove deletes: an added account only, and whether its card's pin, hidden flag and label go too (not when the
-/// current login still shows the card).
+/// What Remove does with an added account's profile folder.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProfileFolder {
+    /// Inside the QuotaGlass profiles: sign out, then delete this canonical path.
+    Delete(PathBuf),
+    /// Nothing at that path: only the settings entry goes.
+    Missing,
+    /// Outside the QuotaGlass profiles (or a link out of them): the folder is never touched, only the entry goes.
+    Outside,
+}
+
+impl ProfileFolder {
+    pub fn of(root: &Path, dir: &Path) -> Self {
+        // `symlink_metadata` does not follow a link, so a dangling link counts as present and goes to the guard.
+        if std::fs::symlink_metadata(dir).is_err() {
+            return Self::Missing;
+        }
+        match connect::guard_inside(root, dir) {
+            Ok(safe) => Self::Delete(safe),
+            Err(_) => Self::Outside,
+        }
+    }
+}
+
+/// What Remove deletes: an added account only, what happens to its folder, and whether its card's pin, hidden flag
+/// and label go too (not when the current login still shows the card).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Removal {
     pub account: AddedAccount,
+    pub folder: ProfileFolder,
     pub forget_card: bool,
 }
 
@@ -149,13 +175,30 @@ pub fn removal_target(
     account_id: &str,
     cards: &[AccountView],
     added: &[AddedAccount],
+    root: &Path,
 ) -> Result<Removal, &'static str> {
     match resolve_account(account_id, cards, added)? {
         AccountTask::CurrentLogin(_) => Err("Use Hide for your current login"),
         AccountTask::Profile(account) => Ok(Removal {
+            folder: ProfileFolder::of(root, &account.profile_dir),
             account,
             forget_card: !cards.iter().any(|c| c.id == account_id && c.current_login),
         }),
+    }
+}
+
+/// Deletes a profile folder after its sign-out. The guard runs again first: the sign-out ran for up to 30 s, and the
+/// folder may have been swapped for a link meanwhile. Blocks; call it from a blocking task.
+fn delete_profile(root: &Path, dir: &Path) -> Result<(), &'static str> {
+    match ProfileFolder::of(root, dir) {
+        ProfileFolder::Delete(safe) => std::fs::remove_dir_all(safe).map_err(|_| {
+            "Could not delete the profile folder. Close its console window and try again."
+        }),
+        ProfileFolder::Missing => Ok(()),
+        ProfileFolder::Outside => {
+            tracing::warn!("a removed profile folder left the QuotaGlass profiles; not deleted");
+            Ok(())
+        }
     }
 }
 
@@ -195,7 +238,7 @@ fn require_card(app: &AppHandle, account_id: &str) -> Result<(), String> {
         .ok_or_else(|| "Unknown account.".to_string())
 }
 
-fn profiles_root() -> Result<std::path::PathBuf, String> {
+fn profiles_root() -> Result<PathBuf, String> {
     connect::profiles_root().ok_or_else(|| "APPDATA is not set.".to_string())
 }
 
@@ -280,35 +323,42 @@ pub async fn open_cli(app: AppHandle, account_id: String) -> Result<(), String> 
 
 /// Remove for an added account: the vendor's sign-out with its profile, then the profile folder, then the entry.
 /// A failed sign-out does not stop the delete: deleting the folder removes the login from this PC. A folder outside
-/// the QuotaGlass profiles is never touched.
+/// the QuotaGlass profiles is never touched; its entry is still removed.
 #[tauri::command]
 pub async fn remove_account(app: AppHandle, account_id: String) -> Result<Settings, String> {
     let (cards, added) = snapshot_and_added(&app);
+    let root = profiles_root()?;
     let Removal {
         account,
+        folder,
         forget_card,
-    } = removal_target(&account_id, &cards, &added)?;
-    let root = profiles_root()?;
+    } = removal_target(&account_id, &cards, &added, &root)?;
 
-    // `symlink_metadata` does not follow a link, so a dangling link counts as present and goes to the guard.
-    if std::fs::symlink_metadata(&account.profile_dir).is_ok() {
-        let safe = connect::guard_inside(&root, &account.profile_dir)?;
-        let tool = app
-            .state::<AppState>()
-            .scheduler
-            .sign_in_tool(account.service);
-        let service = account.service;
-        let profile = connect::plain(&safe);
-        let signed_out = tauri::async_runtime::spawn_blocking(move || {
-            connect::logout(service, tool.as_deref(), &profile)
-        })
-        .await;
-        if !matches!(signed_out, Ok(Ok(()))) {
-            tracing::warn!(?service, "sign-out of a removed profile did not finish");
+    match folder {
+        ProfileFolder::Delete(safe) => {
+            let tool = app
+                .state::<AppState>()
+                .scheduler
+                .sign_in_tool(account.service);
+            let service = account.service;
+            let dir = account.profile_dir.clone();
+            let deleted = tauri::async_runtime::spawn_blocking(move || {
+                if connect::logout(service, tool.as_deref(), &connect::plain(&safe)).is_err() {
+                    tracing::warn!(?service, "sign-out of a removed profile did not finish");
+                }
+                delete_profile(&root, &dir)
+            })
+            .await
+            .map_err(|_| "Could not delete the profile folder.")?;
+            deleted?;
         }
-        std::fs::remove_dir_all(&safe).map_err(|_| {
-            "Could not delete the profile folder. Close its console window and try again."
-        })?;
+        ProfileFolder::Missing => {}
+        ProfileFolder::Outside => {
+            // No path in the log: it comes from the settings file and may name a private folder.
+            tracing::warn!(
+                "a removed account's folder is outside the QuotaGlass profiles; folder left in place"
+            );
+        }
     }
 
     mutate(&app, |s| {
@@ -460,28 +510,109 @@ mod tests {
             card("codex:c", Service::Codex, Some("p2"), true),
         ];
         let added = [added("p1"), added("p2")];
+        let root = Path::new(r"C:\no-such-root\profiles");
         assert_eq!(
-            removal_target("claude:a", &cards, &added),
+            removal_target("claude:a", &cards, &added, root),
             Err("Use Hide for your current login")
         );
         assert_eq!(
-            removal_target("codex:b", &cards, &added),
+            removal_target("codex:b", &cards, &added, root),
             Ok(Removal {
                 account: added[0].clone(),
+                folder: ProfileFolder::Missing,
                 forget_card: true
             })
         );
         assert_eq!(
-            removal_target("codex:c", &cards, &added),
+            removal_target("codex:c", &cards, &added, root),
             Ok(Removal {
                 account: added[1].clone(),
+                folder: ProfileFolder::Missing,
                 forget_card: false
             }),
             "the current login keeps the card, its pin and label"
         );
         assert_eq!(
-            removal_target("ghost", &cards, &added),
+            removal_target("ghost", &cards, &added, root),
             Err("Unknown account.")
         );
+    }
+
+    #[test]
+    fn remove_never_touches_a_folder_outside_the_profiles() {
+        let base = std::env::temp_dir().join(format!("qg-remove-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("profiles");
+        let inside = root.join("p1");
+        let outside = base.join("elsewhere");
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let account = |id: &str, dir: &Path| AddedAccount {
+            id: id.into(),
+            service: Service::Codex,
+            profile_dir: dir.to_path_buf(),
+        };
+        let added = [account("p1", &inside), account("p2", &outside)];
+
+        let r = removal_target("p1", &[], &added, &root).unwrap();
+        assert_eq!(
+            r.folder,
+            ProfileFolder::Delete(inside.canonicalize().unwrap())
+        );
+        let r = removal_target("p2", &[], &added, &root).unwrap();
+        assert_eq!(
+            r.folder,
+            ProfileFolder::Outside,
+            "only the entry goes: the folder is left alone"
+        );
+        assert_eq!(r.account, added[1]);
+
+        // The delete checks again and leaves an outside folder in place.
+        assert_eq!(delete_profile(&root, &outside), Ok(()));
+        assert!(outside.is_dir());
+        assert_eq!(delete_profile(&root, &inside), Ok(()));
+        assert!(!inside.exists());
+        assert_eq!(delete_profile(&root, &inside), Ok(()), "already gone");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Tauri refuses a command with no ACL entry. Every handler in main.rs must be in build.rs and allowed in
+    /// capabilities/main.json, and nothing else.
+    #[test]
+    fn acl_lists_every_command() {
+        use std::collections::BTreeSet;
+        let main_rs = include_str!("main.rs");
+        let build_rs = include_str!("../build.rs");
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
+
+        let between = |text: &'static str, start: &str, end: &str| -> &'static str {
+            let from = text.find(start).expect(start) + start.len();
+            let len = text[from..].find(end).expect(end);
+            &text[from..from + len]
+        };
+        let handlers: BTreeSet<String> = between(main_rs, "generate_handler![", "]")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_start_matches("commands::").to_string())
+            .collect();
+        let manifest: BTreeSet<String> = between(build_rs, "let commands = &[", "];")
+            .split(',')
+            .map(|s| s.trim().trim_matches('"').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let allowed: BTreeSet<String> = caps["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p.as_str()?.strip_prefix("allow-"))
+            .map(|p| p.replace('-', "_"))
+            .collect();
+
+        assert_eq!(handlers.len(), 14, "{handlers:?}");
+        assert!(handlers.contains("detect"));
+        assert_eq!(manifest, handlers, "build.rs AppManifest::commands");
+        assert_eq!(allowed, handlers, "capabilities/main.json allow-* entries");
     }
 }

@@ -137,7 +137,10 @@ pub fn cli_command(
 ) -> (Vec<OsString>, Vec<(&'static str, PathBuf)>) {
     let mut args: Vec<OsString> = Vec::new();
     if action != CliAction::Logout {
-        args.extend(["/c", "start", CONSOLE_TITLE, "cmd", "/k"].map(OsString::from));
+        // `start` runs the absolute cmd.exe, never a bare `cmd` that a search could resolve to another file.
+        args.extend(["/c", "start", CONSOLE_TITLE].map(OsString::from));
+        args.push(cmd_exe().into_os_string());
+        args.push("/k".into());
         args.push(tool.as_os_str().to_owned());
     }
     args.extend(vendor_args(service, action).iter().map(OsString::from));
@@ -148,11 +151,77 @@ pub fn cli_command(
     (args, env)
 }
 
-/// Only an absolute tool for Claude or Codex: a bare name would let `cmd.exe` search the working directory.
+/// Characters that `cmd.exe` reads as syntax. `start` and `/k` parse the tool path again, so a path with one of them
+/// could run a second command.
+const CMD_META: [char; 10] = ['&', '|', '<', '>', '^', '%', '!', '"', '(', ')'];
+const UNSAFE_TOOL: &str = "The tool path contains characters cmd.exe cannot run safely.";
+
+/// `<SystemRoot>\System32`, or `C:\Windows\System32` when SystemRoot is not set, not absolute or not plain.
+fn system32_from(system_root: Option<OsString>) -> PathBuf {
+    system_root
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute() && !p.to_string_lossy().contains(CMD_META))
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+        .join("System32")
+}
+
+fn system32() -> PathBuf {
+    system32_from(std::env::var_os("SystemRoot"))
+}
+
+/// The absolute `cmd.exe`: a bare name would let Windows search the working directory first.
+fn cmd_exe() -> PathBuf {
+    system32().join("cmd.exe")
+}
+
+/// `cmd.exe` with System32 as its working directory: no folder a user can write to is searched for a program.
+fn cmd_launcher() -> Command {
+    let mut cmd = Command::new(cmd_exe());
+    cmd.current_dir(system32());
+    cmd
+}
+
+/// No console window for a helper process.
+fn hide_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
+fn taskkill_args(pid: u32) -> Vec<OsString> {
+    ["/PID", &pid.to_string(), "/T", "/F"]
+        .map(OsString::from)
+        .to_vec()
+}
+
+/// Ends a process and every process it started (a `.cmd` tool runs node under cmd.exe). The result is ignored: the
+/// caller kills the direct child afterwards anyway.
+fn kill_tree(pid: u32) {
+    let mut cmd = Command::new(system32().join("taskkill.exe"));
+    cmd.args(taskkill_args(pid))
+        .current_dir(system32())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    hide_window(&mut cmd);
+    let _ = cmd.status();
+}
+
+/// Only an absolute tool for Claude or Codex: a bare name would let `cmd.exe` search the working directory. A path
+/// with a `cmd.exe` metacharacter is refused.
 fn checked_tool(service: Service, tool: Option<&Path>) -> Result<&Path, &'static str> {
-    tool.filter(|t| t.is_absolute())
+    let tool = tool
+        .filter(|t| t.is_absolute())
         .filter(|_| profile_var(service).is_some())
-        .ok_or("No sign-in tool for that service.")
+        .ok_or("No sign-in tool for that service.")?;
+    if tool.to_string_lossy().contains(CMD_META) {
+        return Err(UNSAFE_TOOL);
+    }
+    Ok(tool)
 }
 
 /// Opens `Login` or `Open` in a visible console. The environment is set on `cmd.exe`, so the console and the CLI in
@@ -172,7 +241,7 @@ pub fn open_console(
     }
     let (args, env) = cli_command(service, tool, action, profile);
     // The console window is the point: the user signs in there. No CREATE_NO_WINDOW.
-    Command::new("cmd.exe")
+    cmd_launcher()
         .args(args)
         .envs(env)
         .spawn()
@@ -199,11 +268,7 @@ pub fn logout(service: Service, tool: Option<&Path>, profile: &Path) -> Result<(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    hide_window(&mut cmd);
     let mut child = cmd.spawn().map_err(|_| "Could not run the sign-out.")?;
     let deadline = Instant::now() + LOGOUT_TIMEOUT;
     loop {
@@ -212,6 +277,8 @@ pub fn logout(service: Service, tool: Option<&Path>, profile: &Path) -> Result<(
             Ok(Some(_)) => return Err("The sign-out failed."),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
             _ => {
+                // `kill` ends only the direct child; the CLI it started would keep the profile folder open.
+                kill_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("The sign-out timed out.");
@@ -239,16 +306,12 @@ impl UrlTarget {
     }
 }
 
-/// Opens a fixed page in the default browser: `cmd /c start "" <url>`, the URL one fixed argument with no character
-/// that `cmd.exe` reads (see `url_targets_are_https_allowlisted`).
+/// Opens a fixed page in the default browser: `<System32>\cmd.exe /c start "" <url>`, the URL one fixed argument with
+/// no character that `cmd.exe` reads (see `url_targets_are_https_allowlisted`).
 pub fn open_url(target: UrlTarget) -> Result<(), &'static str> {
-    let mut cmd = Command::new("cmd.exe");
+    let mut cmd = cmd_launcher();
     cmd.args(["/c", "start", "", target.url()]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    hide_window(&mut cmd);
     cmd.spawn()
         .map(drop)
         .map_err(|_| "Could not open the browser.")
@@ -364,7 +427,9 @@ mod tests {
     fn cli_command_args_are_fixed() {
         let tool = Path::new(r"C:\Program Files\nodejs\claude.cmd");
         let console = |rest: &[&str]| {
-            let mut v = os(&["/c", "start", "QuotaGlass sign-in", "cmd", "/k"]);
+            let mut v = os(&["/c", "start", "QuotaGlass sign-in"]);
+            v.push(cmd_exe().into_os_string());
+            v.push("/k".into());
             v.push(tool.as_os_str().to_owned());
             v.extend(os(rest));
             v
@@ -392,6 +457,67 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn console_runs_absolute_cmd() {
+        let tool = Path::new(r"C:\tools\claude.cmd");
+        let (args, _) = cli_command(Service::Claude, tool, CliAction::Open, None);
+        let cmd = cmd_exe();
+        assert!(cmd.is_absolute(), "{}", cmd.display());
+        assert!(cmd.ends_with(r"System32\cmd.exe"));
+        assert_eq!(args[3], cmd.as_os_str(), "start runs the absolute cmd.exe");
+        assert!(
+            !args.iter().any(|a| a == OsStr::new("cmd")),
+            "never a bare cmd"
+        );
+    }
+
+    #[test]
+    fn system32_falls_back_to_windows() {
+        assert_eq!(
+            system32_from(Some(r"D:\Win".into())),
+            PathBuf::from(r"D:\Win\System32")
+        );
+        for bad in [None, Some("Windows".into()), Some(r"C:\a&b".into())] {
+            assert_eq!(system32_from(bad), PathBuf::from(r"C:\Windows\System32"));
+        }
+    }
+
+    #[test]
+    fn taskkill_kills_the_tree() {
+        assert_eq!(taskkill_args(42), os(&["/PID", "42", "/T", "/F"]));
+    }
+
+    #[test]
+    fn tool_with_cmd_metacharacters_is_refused() {
+        for bad in [
+            r"C:\a&b\claude.cmd",
+            r"C:\a^b\claude.cmd",
+            r"C:\100%\claude.cmd",
+            r"C:\a!b\claude.cmd",
+            r"C:\Program Files (x86)\claude.cmd",
+            r"C:\a|b\claude.cmd",
+            r"C:\a<b>\claude.cmd",
+            r#"C:\a"b\claude.cmd"#,
+        ] {
+            assert_eq!(
+                checked_tool(Service::Claude, Some(Path::new(bad))),
+                Err(UNSAFE_TOOL),
+                "{bad}"
+            );
+            assert!(
+                open_console(Service::Claude, Some(Path::new(bad)), CliAction::Open, None).is_err()
+            );
+            assert!(logout(
+                Service::Claude,
+                Some(Path::new(bad)),
+                Path::new(r"C:\p\abc")
+            )
+            .is_err());
+        }
+        let ok = Path::new(r"C:\Program Files\nodejs\claude.cmd");
+        assert_eq!(checked_tool(Service::Claude, Some(ok)), Ok(ok));
     }
 
     #[test]

@@ -76,8 +76,10 @@ impl Env {
     }
 }
 
+/// A relative PATH entry (`.`, `bin`) is skipped: it names whatever folder the process happens to run in.
 pub fn find_in(dirs: &[PathBuf], names: &[&str]) -> Option<PathBuf> {
     dirs.iter()
+        .filter(|d| d.is_absolute())
         .flat_map(|d| names.iter().map(move |n| d.join(n)))
         .find(|p| is_file(p))
 }
@@ -113,6 +115,19 @@ mod tests {
         .unwrap();
         assert_eq!(p.default_codex_dir, PathBuf::from("D:/codex"));
         assert_eq!(p.default_claude_dir, PathBuf::from("D:/claude"));
+    }
+
+    #[test]
+    fn find_in_skips_relative_entries() {
+        // Tests run in the crate folder, so `src\lib.rs` exists relative to it.
+        let rel = PathBuf::from("src");
+        assert!(rel.join("lib.rs").is_file());
+        assert_eq!(find_in(std::slice::from_ref(&rel), &["lib.rs"]), None);
+        let abs = std::env::current_dir().unwrap().join("src");
+        assert_eq!(
+            find_in(&[rel, abs.clone()], &["lib.rs"]),
+            Some(abs.join("lib.rs"))
+        );
     }
 
     #[test]

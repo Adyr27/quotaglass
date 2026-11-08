@@ -1,9 +1,10 @@
 fn main() {
     // Only these commands are callable from the window; capabilities/main.json allows exactly them.
+    // `commands::tests::acl_lists_every_command` checks this list against main.rs and main.json.
     let commands = &[
         "get_snapshot",
         "refresh_now",
-        "detect_sources",
+        "detect",
         "get_settings",
         "update_settings",
         "connect",

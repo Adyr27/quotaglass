@@ -792,6 +792,41 @@ mod tests {
         assert!(st.snapshot.accounts.is_empty());
     }
 
+    #[tokio::test]
+    async fn missing_profile_is_reported() {
+        let home = temp_home("missing-profile");
+        let gone = home.join("profiles").join("p1");
+        let settings = Settings {
+            added_accounts: vec![added("p1", Service::Codex, gone.clone())],
+            ..Settings::default()
+        };
+        let env = env_at(&home);
+        let mut state = State::new(NOW);
+        let plan = state.take_settings(&settings).expect("first apply");
+        let spec = TaskSpec {
+            provider: plan[0].provider(&env),
+            profile_dir: plan[0].profile_dir(),
+            id: plan[0].id.clone(),
+        };
+        assert_eq!(spec.profile_dir, Some(gone));
+        let shared = Shared {
+            env,
+            emit: Box::new(|_| {}),
+            state: Mutex::new(state),
+        };
+
+        assert!(
+            !shared.run_one(&spec).await,
+            "a missing folder is a failure"
+        );
+        let snapshot = lock(&shared.state).snapshot.clone();
+        assert_eq!(snapshot.accounts.len(), 1);
+        let card = &snapshot.accounts[0];
+        assert_eq!(card.state, quotaglass_core::view::CardState::ProfileMissing);
+        assert_eq!(card.profile_id.as_deref(), Some("p1"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     #[test]
     fn detected_checks_files_only() {
         let home = temp_home("detected");

@@ -118,28 +118,20 @@ fn entries(settings: &Settings) -> Vec<Entry> {
     out
 }
 
-/// The task IDs `providers_for` gives, in the same order. Needs no `Env`, so `apply` can compare lists cheaply.
-pub fn task_ids(settings: &Settings) -> Vec<String> {
+/// The task IDs `providers_for` gives, in the same order.
+#[cfg(test)]
+fn task_ids(settings: &Settings) -> Vec<String> {
     entries(settings).into_iter().map(|e| e.id).collect()
 }
 
 /// One provider per task, keyed by task ID.
-pub fn providers_for(settings: &Settings, env: &Env) -> Vec<(String, Box<dyn Provider>)> {
+#[cfg(test)]
+fn providers_for(settings: &Settings, env: &Env) -> Vec<(String, Box<dyn Provider>)> {
     entries(settings)
         .into_iter()
         .map(|e| {
             let p = e.provider(env);
             (e.id, p)
-        })
-        .collect()
-}
-
-fn task_meta(settings: &Settings) -> Vec<TaskMeta> {
-    entries(settings)
-        .into_iter()
-        .map(|e| TaskMeta {
-            role: e.role(),
-            id: e.id,
         })
         .collect()
 }
@@ -266,21 +258,28 @@ impl State {
         self.tasks.iter().flatten().any(|t| t.id == id)
     }
 
-    /// Takes the settings the scheduler cares about. Returns true when the timers must restart: the task list or the
-    /// refresh interval changed. Labels, pins and hidden accounts only need a republish.
-    fn take_settings(&mut self, settings: &Settings) -> bool {
-        let ids = task_ids(settings);
+    /// Takes the settings the scheduler cares about. Returns the tasks to start when the timers must restart: the
+    /// task list or the refresh interval changed. Labels, pins and hidden accounts only need a republish (`None`).
+    /// The returned entries are the same list that sets `self.tasks`, so the running tasks always match it.
+    fn take_settings(&mut self, settings: &Settings) -> Option<Vec<Entry>> {
+        let plan = entries(settings);
         let tasks_changed = self
             .tasks
             .as_ref()
-            .is_none_or(|t| !t.iter().map(|m| &m.id).eq(ids.iter()));
+            .is_none_or(|t| !t.iter().map(|m| &m.id).eq(plan.iter().map(|e| &e.id)));
         let restart = tasks_changed || self.refresh_minutes != settings.refresh_minutes;
         self.refresh_minutes = settings.refresh_minutes;
         self.labels = settings.labels.clone();
         self.pinned = settings.pinned_accounts.clone();
         self.hidden = settings.hidden_accounts.clone();
         if tasks_changed {
-            let next = task_meta(settings);
+            let next: Vec<TaskMeta> = plan
+                .iter()
+                .map(|e| TaskMeta {
+                    id: e.id.clone(),
+                    role: e.role(),
+                })
+                .collect();
             // A removed task leaves nothing behind. Kept tasks keep their readings until they answer again.
             for old in self.tasks.take().unwrap_or_default() {
                 if !next.iter().any(|t| t.id == old.id) {
@@ -290,7 +289,7 @@ impl State {
             }
             self.tasks = Some(next);
         }
-        restart
+        restart.then_some(plan)
     }
 
     /// Stores what one run of a task found; `None` means its source is gone. Returns true when the snapshot changed.
@@ -349,6 +348,7 @@ struct Task {
     handle: JoinHandle<()>,
 }
 
+/// Lock order: `tasks`, then `shared.state`. `run_one` takes only `state`, `refresh_now` only `tasks`.
 pub struct Scheduler {
     shared: Arc<Shared>,
     tasks: Mutex<Vec<Task>>,
@@ -435,33 +435,31 @@ impl Scheduler {
 
     /// Takes the settings the scheduler cares about and republishes. A change of the task list or of the refresh
     /// interval restarts the timers, which also fetches right away.
+    /// `tasks` stays locked from `take_settings` to the end of the respawn, so two concurrent calls cannot leave
+    /// `state.tasks` from one settings value and the running tasks from another.
     pub fn apply(&self, settings: &Settings) {
-        let restart = {
+        let mut tasks = lock(&self.tasks);
+        let plan = {
             let mut st = lock(&self.shared.state);
-            let restart = st.take_settings(settings);
+            let plan = st.take_settings(settings);
             self.shared.publish(&mut st);
-            restart
+            plan
         };
-        if restart {
-            self.respawn(settings);
+        if let Some(plan) = plan {
+            self.respawn(&mut tasks, plan, settings.refresh_minutes);
         }
     }
 
-    fn respawn(&self, settings: &Settings) {
-        let mut tasks = lock(&self.tasks);
+    fn respawn(&self, tasks: &mut Vec<Task>, plan: Vec<Entry>, refresh_minutes: u8) {
         for t in tasks.drain(..) {
             t.handle.abort();
         }
-        let base = u64::from(settings.refresh_minutes) * 60;
-        let dirs = entries(settings).into_iter().map(|e| e.profile_dir());
-        for ((id, provider), profile_dir) in providers_for(settings, &self.shared.env)
-            .into_iter()
-            .zip(dirs)
-        {
+        let base = u64::from(refresh_minutes) * 60;
+        for e in plan {
             let spec = Arc::new(TaskSpec {
-                id,
-                provider,
-                profile_dir,
+                provider: e.provider(&self.shared.env),
+                profile_dir: e.profile_dir(),
+                id: e.id,
             });
             let wake = Arc::new(Notify::new());
             let shared = self.shared.clone();
@@ -642,14 +640,17 @@ mod tests {
             connected: vec![Connection::ClaudeCurrent],
             ..Settings::default()
         };
-        assert!(st.take_settings(&s), "the first apply starts the tasks");
-        assert!(!st.take_settings(&s));
+        assert!(
+            st.take_settings(&s).is_some(),
+            "the first apply starts the tasks"
+        );
+        assert!(st.take_settings(&s).is_none());
 
         s.labels.insert("claude:x".into(), "Work".into());
         s.pinned_accounts = vec!["claude:x".into()];
         s.hidden_accounts = vec!["claude:y".into()];
         assert!(
-            !st.take_settings(&s),
+            st.take_settings(&s).is_none(),
             "labels, pins and hidden only republish"
         );
         assert_eq!(st.labels.get("claude:x").map(String::as_str), Some("Work"));
@@ -657,14 +658,60 @@ mod tests {
         assert_eq!(st.hidden, ["claude:y"]);
 
         s.refresh_minutes = 5;
-        assert!(st.take_settings(&s), "a new interval restarts the timers");
+        assert!(
+            st.take_settings(&s).is_some(),
+            "a new interval restarts the timers"
+        );
 
         s.connected.push(Connection::Orca);
-        assert!(st.take_settings(&s), "a new task restarts the timers");
+        assert!(
+            st.take_settings(&s).is_some(),
+            "a new task restarts the timers"
+        );
         s.added_accounts
             .push(added("p1", Service::Codex, PathBuf::from("C:/x")));
-        assert!(st.take_settings(&s));
-        assert!(!st.take_settings(&s));
+        assert!(st.take_settings(&s).is_some());
+        assert!(st.take_settings(&s).is_none());
+    }
+
+    #[test]
+    fn respawn_plan_matches_state_tasks() {
+        let mut st = State::new(NOW);
+        let s = Settings {
+            connected: vec![Connection::Orca, Connection::ClaudeCurrent],
+            added_accounts: vec![added("p1", Service::Codex, PathBuf::from("C:/p1"))],
+            ..Settings::default()
+        };
+        let plan = st
+            .take_settings(&s)
+            .expect("the first apply starts the tasks");
+        let plan_ids: Vec<&str> = plan.iter().map(|e| e.id.as_str()).collect();
+        let state_ids: Vec<&str> = st.tasks.iter().flatten().map(|t| t.id.as_str()).collect();
+        assert_eq!(plan_ids, state_ids);
+        assert_eq!(plan_ids, ["orca", "claude-current", "p1"]);
+        assert_eq!(plan[2].profile_dir(), Some(PathBuf::from("C:/p1")));
+        assert_eq!(plan[0].profile_dir(), None);
+    }
+
+    #[test]
+    fn record_ignores_unknown_task() {
+        let mut st = State::new(NOW);
+        assert!(
+            !st.record(
+                "claude-current",
+                Some(outcome("claude-current", Ok(vec![])))
+            ),
+            "no task list yet"
+        );
+        st.take_settings(&Settings {
+            connected: vec![Connection::ClaudeCurrent],
+            ..Settings::default()
+        });
+        assert!(!st.record("gone", Some(outcome("gone", Ok(vec![reading("gone")])))));
+        assert!(!st.record("gone", None));
+        assert!(st.outcomes.is_empty());
+        st.rebuild(NOW);
+        assert!(st.snapshot.accounts.is_empty());
     }
 
     fn reading(local: &str) -> Reading {

@@ -50,19 +50,18 @@ pub fn update(app: &AppHandle, patch: SettingsPatch) -> Result<Settings, String>
     }
 
     // Apply to the latest settings, not the copy above: the window rect may have been saved meanwhile.
-    let saved = {
-        let mut current = lock(&state.settings);
-        let mut next = current.clone();
-        next.apply(patch);
-        state
-            .store
-            .save(&next)
-            .map_err(|_| "Could not save settings.")?;
-        *current = next.clone();
-        next
-    };
-    state.scheduler.apply(&saved);
-    Ok(saved)
+    // The scheduler takes them while the settings lock is still held, so the last saved settings are the last applied.
+    // Lock order: settings, then the scheduler's own locks. Nothing the scheduler runs takes the settings lock.
+    let mut current = lock(&state.settings);
+    let mut next = current.clone();
+    next.apply(patch);
+    state
+        .store
+        .save(&next)
+        .map_err(|_| "Could not save settings.")?;
+    *current = next.clone();
+    state.scheduler.apply(&next);
+    Ok(next)
 }
 
 #[tauri::command]

@@ -63,6 +63,16 @@ impl LastReadings {
         self.0.retain(|_, m| !m.is_empty());
         dropped
     }
+
+    /// The card ID of a stored reading of this task, if any. The lowest ID wins, so the answer is stable.
+    fn key_of(&self, task_id: &str) -> Option<String> {
+        self.0
+            .iter()
+            .filter(|(_, per_task)| per_task.keys().any(|(_, t)| t == task_id))
+            .map(|(id, _)| id)
+            .min()
+            .cloned()
+    }
 }
 
 pub fn build(
@@ -145,8 +155,13 @@ pub fn build(
         }
         let (state, reason) = failure_state(o.kind, e).unwrap_or((CardState::NoSource, e.reason()));
         let role = ctx.role(&o.task_id);
+        // Reuse the card ID of a stored reading of this task, so labels, pins and hidden carry over. A task with a
+        // stored reading is normally `covered` above; this keeps the ID right if that ever changes.
+        let id = last
+            .key_of(&o.task_id)
+            .unwrap_or_else(|| AccountKey::new(service, None, o.task_id.as_str()).store_key());
         cards.push(AccountView {
-            id: AccountKey::new(service, None, o.task_id.as_str()).store_key(),
+            id,
             service,
             label: display_name(service).to_string(),
             plan: None,
@@ -183,7 +198,13 @@ pub fn build(
             let usable = !c.hidden
                 && !matches!(c.state, CardState::LoginExpired | CardState::ProfileMissing)
                 && !c.buckets.is_empty();
-            let reset = c.buckets.iter().filter_map(|b| b.resets_at_ms).min();
+            // A bucket whose reset has passed no longer holds, so its reset does not break a tie.
+            let reset = c
+                .buckets
+                .iter()
+                .filter(|b| b.freshness != Freshness::Stale)
+                .filter_map(|b| b.resets_at_ms)
+                .min();
             (c.room_left.filter(|_| usable), reset)
         })
         .collect();
@@ -952,6 +973,136 @@ mod tests {
             .map(|c| c.id.as_str())
             .collect();
         assert_eq!(best, [id_of(Service::Claude, "c@example.com").as_str()]);
+    }
+
+    #[test]
+    fn best_now_tie_break_ignores_stale_resets() {
+        let mut last = LastReadings::default();
+        // Same room (80) on both. A's earliest reset is on a bucket whose reset passed, so it must not count.
+        let mut a = reading(
+            Service::Claude,
+            Some("a@example.com"),
+            "claude-current",
+            SourceKind::Direct,
+            &[90.0, 20.0],
+        );
+        a.buckets[0].resets_at_ms = Some(NOW - 1);
+        a.buckets[1].resets_at_ms = Some(NOW + 7_200_000);
+        let mut b = reading(
+            Service::Claude,
+            Some("b@example.com"),
+            "p1",
+            SourceKind::Direct,
+            &[20.0],
+        );
+        b.buckets[0].resets_at_ms = Some(NOW + 3_600_000);
+        let cards = run(
+            &[
+                ok("claude-current", SourceKind::Direct, vec![a]),
+                ok("p1", SourceKind::Direct, vec![b]),
+            ],
+            &mut last,
+        );
+        let best: Vec<&str> = cards
+            .iter()
+            .filter(|c| c.best_now)
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(best, [id_of(Service::Claude, "b@example.com").as_str()]);
+    }
+
+    #[test]
+    fn all_stale_account_is_never_best_now() {
+        let mut last = LastReadings::default();
+        let mut a = reading(
+            Service::Claude,
+            Some("a@example.com"),
+            "claude-current",
+            SourceKind::Direct,
+            &[1.0, 2.0],
+        );
+        for bucket in &mut a.buckets {
+            bucket.resets_at_ms = Some(NOW - 1);
+        }
+        let cards = run(
+            &[
+                ok("claude-current", SourceKind::Direct, vec![a]),
+                claude("p1", "b@example.com", 50.0),
+                claude("p2", "c@example.com", 60.0),
+            ],
+            &mut last,
+        );
+        let stale = cards
+            .iter()
+            .find(|c| c.id == id_of(Service::Claude, "a@example.com"))
+            .unwrap();
+        assert!(!stale.best_now);
+        assert_eq!(stale.room_left, None);
+        let best: Vec<&str> = cards
+            .iter()
+            .filter(|c| c.best_now)
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(best, [id_of(Service::Claude, "b@example.com").as_str()]);
+    }
+
+    #[test]
+    fn hidden_current_login_stays_hidden_when_its_task_errors() {
+        let mut last = LastReadings::default();
+        let mut prefs = Prefs::none();
+        let id = id_of(Service::Claude, "a@example.com");
+        prefs.hidden = vec![id.clone()];
+        prefs.pinned = vec![id.clone()];
+        prefs.labels.insert(id.clone(), "Work".into());
+        run_with(
+            &[claude("claude-current", "a@example.com", 10.0)],
+            &mut last,
+            &prefs,
+        );
+        for e in [FetchError::Expired, FetchError::Timeout] {
+            let cards = run_with(
+                &[err(
+                    "claude-current",
+                    SourceKind::Direct,
+                    Service::Claude,
+                    e,
+                )],
+                &mut last,
+                &prefs,
+            );
+            assert_eq!(cards.len(), 1, "no second card under the task's own ID");
+            assert_eq!(cards[0].id, id);
+            assert!(cards[0].hidden && cards[0].pinned);
+            assert_eq!(cards[0].label, "Work");
+            assert_ne!(cards[0].state, CardState::Ok);
+        }
+    }
+
+    #[test]
+    fn error_card_reuses_remembered_key() {
+        let mut last = LastReadings::default();
+        let mut prefs = Prefs::none();
+        let id = id_of(Service::Claude, "a@example.com");
+        prefs.hidden = vec![id.clone()];
+        run_with(
+            &[claude("claude-current", "a@example.com", 10.0)],
+            &mut last,
+            &prefs,
+        );
+        assert_eq!(last.key_of("claude-current").as_deref(), Some(id.as_str()));
+        assert_eq!(last.key_of("p1"), None);
+        // Without a remembered key the error card falls back to the task's own ID.
+        let cards = run_with(
+            &[err(
+                "p1",
+                SourceKind::Direct,
+                Service::Claude,
+                FetchError::Expired,
+            )],
+            &mut last,
+            &prefs,
+        );
+        assert!(cards.iter().any(|c| c.id == "claude:p1" && !c.hidden));
     }
 
     #[test]

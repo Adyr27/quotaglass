@@ -25,9 +25,12 @@ export interface Card {
 const WARN_AT_PERCENT = 80;
 const MAX_ENTER_STAGGER = 8;
 
-/** An expired Claude or Codex login can be renewed from the card. */
+/**
+ * An expired Claude or Codex current login can be renewed from the card. Sign-in runs the CLI on its
+ * default folder, so an added account (profileId set) gets no button until sign-in knows profiles.
+ */
 function canSignIn(view: AccountView): boolean {
-  return view.state === "loginExpired" && view.service !== "antigravity";
+  return view.state === "loginExpired" && view.currentLogin && view.profileId === null && view.service !== "antigravity";
 }
 
 export function createCard(enterIndex: number): Card {

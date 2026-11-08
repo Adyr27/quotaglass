@@ -3,12 +3,14 @@
 
 mod commands;
 mod connect;
+mod notify;
 mod scheduler;
 mod settings;
 mod tray;
 mod window;
 
 use commands::AppState;
+use notify::{WarnStore, Warnings};
 use quotaglass_core::Env;
 use scheduler::Scheduler;
 use settings::SettingsStore;
@@ -32,6 +34,7 @@ fn main() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let path = SettingsStore::default_path().ok_or("APPDATA is not set")?;
             let store = SettingsStore::new(path);
@@ -41,10 +44,17 @@ fn main() {
                 settings.autostart = enabled;
             }
 
+            let warn_store = WarnStore::new(WarnStore::default_path().ok_or("APPDATA is not set")?);
+            app.manage(Warnings {
+                state: Mutex::new(warn_store.load()),
+                store: warn_store,
+            });
+
             let handle = app.handle().clone();
             let env = Env::from_system().map_err(|e| format!("Cannot start: {e:?}"))?;
             let scheduler = Scheduler::new(env, move |snapshot| {
                 let _ = handle.emit("snapshot", snapshot);
+                notify::on_snapshot(&handle, &handle.state::<Warnings>(), snapshot);
             });
 
             app.manage(AppState {

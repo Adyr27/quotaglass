@@ -13,6 +13,7 @@ pub mod provider;
 pub mod secret;
 pub mod sources;
 pub mod view;
+pub mod warnings;
 
 #[cfg(test)]
 pub(crate) mod testutil;

@@ -83,6 +83,7 @@ fn main() {
             commands::set_label,
             commands::connect_source,
             commands::open_url,
+            commands::set_panel_open,
         ])
         .run(tauri::generate_context!())
         .expect("error while running QuotaGlass");

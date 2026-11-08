@@ -21,6 +21,7 @@
     "allow-set-pinned",
     "allow-set-label",
     "allow-connect-source",
-    "allow-open-url"
+    "allow-open-url",
+    "allow-set-panel-open"
   ]
 }

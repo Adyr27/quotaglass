@@ -16,6 +16,7 @@ fn main() {
         "set_label",
         "connect_source",
         "open_url",
+        "set_panel_open",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

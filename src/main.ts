@@ -7,6 +7,7 @@ import {
   getSettings,
   getSnapshot,
   onBackdrop,
+  onTheme,
   onOpenSettings,
   onSettings,
   onSnapshot,
@@ -286,4 +287,5 @@ void Promise.all([
   }),
   onBackdrop((payload) => document.documentElement.classList.toggle("no-acrylic", !payload.acrylic)),
   onOpenSettings(() => openSettings()),
+  onTheme((theme) => (document.documentElement.dataset.theme = theme)),
 ]).then(() => load());

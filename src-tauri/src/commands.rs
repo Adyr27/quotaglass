@@ -3,6 +3,7 @@
 use crate::connect::{self, CliAction, UrlTarget};
 use crate::scheduler::{lock, Detected, Scheduler};
 use crate::settings::{AddedAccount, Connection, Settings, SettingsPatch, SettingsStore};
+use crate::window;
 use quotaglass_core::view::{AccountView, Snapshot};
 use quotaglass_core::Service;
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ pub fn emit_backdrop(app: &AppHandle, acrylic: bool) {
 }
 
 /// Applies a patch: window and autostart side effects first, then the file, then the scheduler.
-/// Used by the `update_settings` command and the tray's Pin item (always on top).
+/// Used by the `update_settings` command.
 pub fn update(app: &AppHandle, patch: SettingsPatch) -> Result<Settings, String> {
     let state = app.state::<AppState>();
     let (before, after) = {
@@ -54,15 +55,22 @@ pub fn update(app: &AppHandle, patch: SettingsPatch) -> Result<Settings, String>
     // Apply to the latest settings, not the copy above: the window rect may have been saved meanwhile.
     // The scheduler takes them while the settings lock is still held, so the last saved settings are the last applied.
     // Lock order: settings, then the scheduler's own locks. Nothing the scheduler runs takes the settings lock.
-    let mut current = lock(&state.settings);
-    let mut next = current.clone();
-    next.apply(patch);
-    state
-        .store
-        .save(&next)
-        .map_err(|_| "Could not save settings.")?;
-    *current = next.clone();
-    state.scheduler.apply(&next);
+    let next = {
+        let mut current = lock(&state.settings);
+        let mut next = current.clone();
+        next.apply(patch);
+        state
+            .store
+            .save(&next)
+            .map_err(|_| "Could not save settings.")?;
+        *current = next.clone();
+        state.scheduler.apply(&next);
+        next
+    };
+    // After the settings lock is released: the look is applied on the main thread.
+    if (next.theme, next.material) != (before.theme, before.material) {
+        window::apply_look(app, next.theme, next.material);
+    }
     Ok(next)
 }
 
@@ -72,7 +80,14 @@ pub fn get_snapshot(app: AppHandle) -> Snapshot {
     if !state.acrylic.load(Ordering::Relaxed) {
         emit_backdrop(&app, false);
     }
+    window::resend_theme(&app);
     state.scheduler.snapshot()
+}
+
+/// Opens the panel from the pill, or closes it back to the pill.
+#[tauri::command]
+pub async fn set_panel_open(app: AppHandle, open: bool) -> Result<(), String> {
+    window::set_panel_open(&app, open).map_err(|_| "Could not resize the window.".to_string())
 }
 
 #[tauri::command]
@@ -610,7 +625,7 @@ mod tests {
             .map(|p| p.replace('-', "_"))
             .collect();
 
-        assert_eq!(handlers.len(), 14, "{handlers:?}");
+        assert_eq!(handlers.len(), 15, "{handlers:?}");
         assert!(handlers.contains("detect"));
         assert_eq!(manifest, handlers, "build.rs AppManifest::commands");
         assert_eq!(allowed, handlers, "capabilities/main.json allow-* entries");

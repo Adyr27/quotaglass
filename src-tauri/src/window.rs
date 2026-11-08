@@ -1,17 +1,17 @@
-//! The one window: restore its place, acrylic backdrop, always-on-top, and saving position and size.
+//! The one window: pill and panel geometry, docking, glass material, theme, always-on-top, and saving the pill's place.
 
 use crate::commands::{emit_backdrop, AppState};
 use crate::scheduler::lock;
-use crate::settings::WindowRect;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use crate::settings::{Material, Theme, WindowRect};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent,
+};
 
 const MARGIN: i64 = 24;
 const SAVE_DELAY: Duration = Duration::from_millis(500);
-/// RGBA tint under the acrylic blur.
-const ACRYLIC_TINT: (u8, u8, u8, u8) = (18, 18, 22, 140);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MonitorRect {
@@ -30,13 +30,7 @@ pub fn clamp_to_monitors(rect: WindowRect, monitors: &[MonitorRect]) -> WindowRe
     };
     let centre_x = i64::from(rect.x) + i64::from(rect.width) / 2;
     let centre_y = i64::from(rect.y) + i64::from(rect.height) / 2;
-    let on = |m: &MonitorRect| {
-        centre_x >= i64::from(m.x)
-            && centre_x < i64::from(m.x) + i64::from(m.width)
-            && centre_y >= i64::from(m.y)
-            && centre_y < i64::from(m.y) + i64::from(m.height)
-    };
-    match monitors.iter().find(|m| on(m)) {
+    match monitors.iter().find(|m| contains(m, centre_x, centre_y)) {
         Some(m) => WindowRect {
             width: rect.width.min(m.width),
             height: rect.height.min(m.height),
@@ -57,72 +51,306 @@ pub fn clamp_to_monitors(rect: WindowRect, monitors: &[MonitorRect]) -> WindowRe
     }
 }
 
+/// Pill and panel sizes in logical px; multiply by the monitor's scale factor.
+pub const PILL: (u32, u32) = (440, 44);
+pub const PANEL: (u32, u32) = (440, 344);
+
+/// Where the pill goes on first run: bottom-right of the work area, `MARGIN` (scaled) from both edges.
+pub fn default_pill_rect(work: MonitorRect, scale: f64) -> WindowRect {
+    let px = |v: i64| (v as f64 * scale).round() as i64;
+    let (w, h, m) = (px(PILL.0.into()), px(PILL.1.into()), px(MARGIN));
+    WindowRect {
+        x: (i64::from(work.x) + i64::from(work.width) - w - m) as i32,
+        y: (i64::from(work.y) + i64::from(work.height) - h - m) as i32,
+        width: w as u32,
+        height: h as u32,
+    }
+}
+
+/// The panel opens from the pill: same left and bottom edges (grows up) when it fits above,
+/// else same top edge (grows down); then it is moved to fit inside `work`.
+pub fn panel_rect(pill: WindowRect, panel_w: u32, panel_h: u32, work: MonitorRect) -> WindowRect {
+    let (top, left) = (i64::from(work.y), i64::from(work.x));
+    let bottom = top + i64::from(work.height);
+    let right = left + i64::from(work.width);
+    let grown_up = i64::from(pill.y) + i64::from(pill.height) - i64::from(panel_h);
+    let y = if grown_up >= top {
+        grown_up
+    } else {
+        i64::from(pill.y)
+    };
+    // `max` last: a panel taller than the work area keeps its top (and title) visible.
+    let y = y.min(bottom - i64::from(panel_h)).max(top);
+    let x = i64::from(pill.x).min(right - i64::from(panel_w)).max(left);
+    WindowRect {
+        x: x as i32,
+        y: y as i32,
+        width: panel_w,
+        height: panel_h,
+    }
+}
+
+/// Where the pill goes when the panel closes: the same offset from the panel as when it opened,
+/// so a panel dragged while open brings the pill with it.
+pub fn pill_after_close(
+    open_pill: WindowRect,
+    open_panel: WindowRect,
+    panel_now: WindowRect,
+) -> WindowRect {
+    WindowRect {
+        x: open_pill.x - open_panel.x + panel_now.x,
+        y: open_pill.y - open_panel.y + panel_now.y,
+        ..open_pill
+    }
+}
+
+fn contains(m: &MonitorRect, x: i64, y: i64) -> bool {
+    x >= i64::from(m.x)
+        && x < i64::from(m.x) + i64::from(m.width)
+        && y >= i64::from(m.y)
+        && y < i64::from(m.y) + i64::from(m.height)
+}
+
+/// Panel state. `open` holds the pill and panel rects from the moment the panel opened; only
+/// `set_panel_open` locks it. Main-thread code reads `panel_open` instead, so it never waits on a
+/// lock held by a command that is itself waiting on the main thread.
+#[derive(Default)]
+pub struct WindowState {
+    open: Mutex<Option<(WindowRect, WindowRect)>>,
+    panel_open: AtomicBool,
+    dark: AtomicBool,
+}
+
+struct Screen {
+    full: MonitorRect,
+    work: MonitorRect,
+    scale: f64,
+}
+
+fn to_screen(m: &tauri::Monitor) -> Screen {
+    let work = m.work_area();
+    Screen {
+        full: MonitorRect {
+            x: m.position().x,
+            y: m.position().y,
+            width: m.size().width,
+            height: m.size().height,
+        },
+        work: MonitorRect {
+            x: work.position.x,
+            y: work.position.y,
+            width: work.size.width,
+            height: work.size.height,
+        },
+        scale: m.scale_factor(),
+    }
+}
+
+/// The monitor under the rect's centre, else the primary monitor.
+fn screen_for(window: &WebviewWindow, rect: WindowRect) -> Option<Screen> {
+    let x = i64::from(rect.x) + i64::from(rect.width) / 2;
+    let y = i64::from(rect.y) + i64::from(rect.height) / 2;
+    let monitors = window.available_monitors().unwrap_or_default();
+    monitors
+        .iter()
+        .map(to_screen)
+        .find(|s| contains(&s.full, x, y))
+        .or_else(|| {
+            window
+                .primary_monitor()
+                .ok()
+                .flatten()
+                .as_ref()
+                .map(to_screen)
+        })
+}
+
+fn monitor_rects(window: &WebviewWindow) -> Vec<MonitorRect> {
+    let monitors = window.available_monitors().unwrap_or_default();
+    monitors.iter().map(|m| to_screen(m).full).collect()
+}
+
+fn scaled(v: u32, scale: f64) -> u32 {
+    (f64::from(v) * scale).round() as u32
+}
+
+fn current_rect(window: &WebviewWindow) -> tauri::Result<WindowRect> {
+    let (pos, size) = (window.outer_position()?, window.outer_size()?);
+    Ok(WindowRect {
+        x: pos.x,
+        y: pos.y,
+        width: size.width,
+        height: size.height,
+    })
+}
+
+fn place(window: &WebviewWindow, r: WindowRect) -> tauri::Result<()> {
+    window.set_size(PhysicalSize::new(r.width, r.height))?;
+    window.set_position(PhysicalPosition::new(r.x, r.y))
+}
+
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let window = app
         .get_webview_window("main")
         .ok_or(tauri::Error::WindowNotFound)?;
+    app.manage(WindowState::default());
     let state = app.state::<AppState>();
     let settings = lock(&state.settings).clone();
 
-    if let Some(saved) = settings.pill_position {
-        let monitors: Vec<MonitorRect> = window
-            .available_monitors()?
-            .iter()
-            .map(|m| MonitorRect {
-                x: m.position().x,
-                y: m.position().y,
-                width: m.size().width,
-                height: m.size().height,
-            })
-            .collect();
-        let rect = clamp_to_monitors(saved, &monitors);
-        window.set_size(PhysicalSize::new(rect.width, rect.height))?;
-        window.set_position(PhysicalPosition::new(rect.x, rect.y))?;
+    // The pill size is fixed; only its place is saved.
+    let start = match settings.pill_position {
+        Some(saved) => screen_for(&window, saved).map(|s| {
+            let sized = WindowRect {
+                width: scaled(PILL.0, s.scale),
+                height: scaled(PILL.1, s.scale),
+                ..saved
+            };
+            clamp_to_monitors(sized, &monitor_rects(&window))
+        }),
+        None => window
+            .primary_monitor()?
+            .map(|m| to_screen(&m))
+            .map(|s| default_pill_rect(s.work, s.scale)),
+    };
+    if let Some(rect) = start {
+        place(&window, rect)?;
     }
 
-    if window_vibrancy::apply_acrylic(&window, Some(ACRYLIC_TINT)).is_err() {
-        tracing::warn!("acrylic backdrop is not available; the UI will use a solid background");
-        state.acrylic.store(false, Ordering::Relaxed);
-        emit_backdrop(app, false);
-    }
+    apply_look(app, settings.theme, settings.material);
     window.set_always_on_top(settings.always_on_top)?;
 
     // Moved and Resized fire many times per drag: save once the window has been still for 500 ms.
     let generation = Arc::new(AtomicU64::new(0));
     let handle = app.clone();
-    window.on_window_event(move |event| {
-        if !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
-            return;
-        }
-        let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let generation = generation.clone();
-        let handle = handle.clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(SAVE_DELAY).await;
-            if generation.load(Ordering::SeqCst) == mine {
-                save_current(&handle);
+    window.on_window_event(move |event| match event {
+        WindowEvent::ThemeChanged(_) => {
+            let (theme, material) = {
+                let state = handle.state::<AppState>();
+                let settings = lock(&state.settings);
+                (settings.theme, settings.material)
+            };
+            if theme == Theme::System {
+                apply_look(&handle, theme, material);
             }
-        });
+        }
+        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+            let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
+            let generation = generation.clone();
+            let handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(SAVE_DELAY).await;
+                if generation.load(Ordering::SeqCst) == mine {
+                    save_current(&handle);
+                }
+            });
+        }
+        _ => {}
     });
 
     window.show()
+}
+
+/// Clears every backdrop, then applies the chosen one. False when the OS refused it.
+pub fn apply_material(window: &WebviewWindow, m: Material, dark: bool) -> bool {
+    let _ = window_vibrancy::clear_acrylic(window);
+    let _ = window_vibrancy::clear_mica(window);
+    let _ = window_vibrancy::clear_blur(window);
+    let tint = |on_dark, on_light| Some(if dark { on_dark } else { on_light });
+    match m {
+        Material::Acrylic => {
+            window_vibrancy::apply_acrylic(window, tint((18, 18, 22, 140), (246, 246, 244, 150)))
+                .is_ok()
+        }
+        Material::Clear => {
+            window_vibrancy::apply_acrylic(window, tint((18, 18, 22, 60), (246, 246, 244, 70)))
+                .is_ok()
+        }
+        Material::Mica => window_vibrancy::apply_mica(window, Some(dark)).is_ok(),
+    }
+}
+
+/// Resolves the theme, tells the UI, and re-applies the material with the matching tint.
+/// Takes values, not the settings lock: on the main thread `run_on_main_thread` runs inline.
+pub fn apply_look(app: &AppHandle, theme: Theme, material: Material) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = handle.get_webview_window("main") else {
+            return;
+        };
+        let dark = match theme {
+            Theme::Dark => true,
+            Theme::Light => false,
+            Theme::System => window.theme().map_or(true, |t| t == tauri::Theme::Dark),
+        };
+        handle
+            .state::<WindowState>()
+            .dark
+            .store(dark, Ordering::Relaxed);
+        emit_theme(&handle, dark);
+        let glass = apply_material(&window, material, dark);
+        if !glass {
+            tracing::warn!(
+                "the glass backdrop is not available; the UI will use a solid background"
+            );
+        }
+        handle
+            .state::<AppState>()
+            .acrylic
+            .store(glass, Ordering::Relaxed);
+        emit_backdrop(&handle, glass);
+    });
+}
+
+fn emit_theme(app: &AppHandle, dark: bool) {
+    let _ = app.emit("theme", if dark { "dark" } else { "light" });
+}
+
+/// Re-sends the theme for a UI that loaded after `setup` emitted it.
+pub fn resend_theme(app: &AppHandle) {
+    emit_theme(app, app.state::<WindowState>().dark.load(Ordering::Relaxed));
+}
+
+/// Opens the panel from the pill (one resize) or closes it back to the pill.
+pub fn set_panel_open(app: &AppHandle, open: bool) -> tauri::Result<()> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or(tauri::Error::WindowNotFound)?;
+    let ws = app.state::<WindowState>();
+    let mut slot = lock(&ws.open);
+    let now = current_rect(&window)?;
+    if open {
+        if slot.is_some() {
+            return Ok(());
+        }
+        let Some(screen) = screen_for(&window, now) else {
+            return Ok(());
+        };
+        let (w, h) = (scaled(PANEL.0, screen.scale), scaled(PANEL.1, screen.scale));
+        let panel = panel_rect(now, w, h, screen.work);
+        // Set before resizing, so the resize is not saved as the pill's place.
+        ws.panel_open.store(true, Ordering::SeqCst);
+        place(&window, panel)?;
+        *slot = Some((now, panel));
+    } else if let Some((pill, panel)) = slot.take() {
+        let back = clamp_to_monitors(pill_after_close(pill, panel, now), &monitor_rects(&window));
+        place(&window, back)?;
+        ws.panel_open.store(false, Ordering::SeqCst);
+    }
+    Ok(())
 }
 
 fn save_current(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    if window.is_minimized().unwrap_or(false) {
+    // While the panel is open the window is the panel, not the pill.
+    if app.state::<WindowState>().panel_open.load(Ordering::SeqCst)
+        || window.is_minimized().unwrap_or(false)
+    {
         return;
     }
-    let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+    let Ok(rect) = current_rect(&window) else {
         return;
-    };
-    let rect = WindowRect {
-        x: pos.x,
-        y: pos.y,
-        width: size.width,
-        height: size.height,
     };
 
     let state = app.state::<AppState>();
@@ -136,7 +364,7 @@ fn save_current(app: &AppHandle) {
     }
 }
 
-/// Tray left click and the Show/Hide item.
+/// Tray left click.
 pub fn toggle(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -148,11 +376,19 @@ pub fn toggle(app: &AppHandle) {
     }
 }
 
+/// Tray Show: bring the window back on screen if a monitor change left it off, then focus it.
 pub fn show(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Ok(now) = current_rect(&window) {
+        let back = clamp_to_monitors(now, &monitor_rects(&window));
+        if back != now {
+            let _ = place(&window, back);
+        }
     }
+    let _ = window.show();
+    let _ = window.set_focus();
 }
 
 #[cfg(test)]
@@ -220,5 +456,95 @@ mod tests {
         };
         assert_eq!(clamp_to_monitors(rect, &[PRIMARY, SECOND]), rect);
         assert_eq!(clamp_to_monitors(rect, &[]), rect);
+    }
+
+    const WORK: MonitorRect = MonitorRect {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1040,
+    };
+    fn rect(x: i32, y: i32, width: u32, height: u32) -> WindowRect {
+        WindowRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn default_pill_docks_bottom_right() {
+        assert_eq!(
+            default_pill_rect(WORK, 1.0),
+            rect(1920 - 440 - 24, 1040 - 44 - 24, 440, 44)
+        );
+        assert_eq!(
+            default_pill_rect(WORK, 1.5),
+            rect(1920 - 660 - 36, 1040 - 66 - 36, 660, 66)
+        );
+    }
+
+    #[test]
+    fn panel_rect_fits_work_area() {
+        // Pill at the bottom: the panel grows up, sharing the pill's bottom edge.
+        let pill = rect(1000, 972, 440, 44);
+        assert_eq!(
+            panel_rect(pill, 440, 344, WORK),
+            rect(1000, 972 + 44 - 344, 440, 344)
+        );
+        // Pill near the top: no room above, so it grows down from the pill's top edge.
+        let pill = rect(1000, 10, 440, 44);
+        assert_eq!(panel_rect(pill, 440, 344, WORK), rect(1000, 10, 440, 344));
+        // Pill half off the right edge: shifted left to fit.
+        let pill = rect(1700, 600, 440, 44);
+        assert_eq!(
+            panel_rect(pill, 440, 344, WORK),
+            rect(1920 - 440, 600 + 44 - 344, 440, 344)
+        );
+        // Second monitor left of the primary (negative x), pill past its left edge.
+        let left = MonitorRect {
+            x: -1280,
+            y: 0,
+            width: 1280,
+            height: 984,
+        };
+        let pill = rect(-1300, 900, 440, 44);
+        assert_eq!(
+            panel_rect(pill, 440, 344, left),
+            rect(-1280, 900 + 44 - 344, 440, 344)
+        );
+        // A panel taller than the room in either direction is pinned to the work area top.
+        let short = MonitorRect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 400,
+        };
+        let pill = rect(0, 100, 440, 44);
+        assert_eq!(
+            panel_rect(pill, 440, 344, short),
+            rect(0, 400 - 344, 440, 344)
+        );
+    }
+
+    #[test]
+    fn panel_rect_scale_150() {
+        let pill = default_pill_rect(WORK, 1.5);
+        let panel = panel_rect(pill, 660, 516, WORK);
+        assert_eq!(panel, rect(pill.x, pill.y + 66 - 516, 660, 516));
+    }
+
+    #[test]
+    fn close_restores_pill_rect() {
+        let pill = rect(1000, 972, 440, 44);
+        let panel = panel_rect(pill, 440, 344, WORK);
+        assert_eq!(pill_after_close(pill, panel, panel), pill);
+        // Dragged 50 px left and 100 px up while open: the pill follows.
+        let moved = rect(panel.x - 50, panel.y - 100, 440, 344);
+        assert_eq!(
+            pill_after_close(pill, panel, moved),
+            rect(950, 872, 440, 44)
+        );
     }
 }

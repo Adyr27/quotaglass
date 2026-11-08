@@ -1,0 +1,23 @@
+{
+  "response": {
+    "description": "Fixture shaped like the live app's RetrieveUserQuotaSummary (2026-11-08).",
+    "groups": [
+      {
+        "displayName": "Gemini",
+        "description": "Gemini models",
+        "buckets": [
+          { "bucketId": "g-5h", "displayName": "5-hour", "description": "", "window": "5h", "remainingFraction": 0.38, "resetTime": "2026-11-08T17:00:00Z" },
+          { "bucketId": "g-wk", "displayName": "Weekly", "window": "weekly", "remainingFraction": 1, "resetTime": null }
+        ]
+      },
+      {
+        "displayName": "Claude and GPT",
+        "description": "Partner models",
+        "buckets": [
+          { "bucketId": "c-5h", "displayName": "5-hour", "disabled": true, "window": "5h", "remainingFraction": 0, "resetTime": "2026-11-08T18:30:00.500+00:00" },
+          { "bucketId": "c-pool", "displayName": "Pool", "window": "monthly", "remainingFraction": 0.75 }
+        ]
+      }
+    ]
+  }
+}

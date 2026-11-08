@@ -12,18 +12,24 @@ use crate::secret::Secret;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
-const LOCAL_ID: &str = "claude-direct";
-const UNNAMED_LABEL: &str = "Claude (CLI login)";
+/// The default display name. Never the email (spec §6.3); the user can rename the account in the UI.
+const LABEL: &str = "Claude";
 const FIVE_HOUR_SECS: u64 = 18_000;
 const WEEK_SECS: u64 = 604_800;
 
-/// The Claude Code login on this PC (`~/.claude/.credentials.json`).
-pub struct ClaudeDirect;
+/// One Claude Code login on this PC: `<dir>/.credentials.json`.
+///
+/// `dir` is the current login's folder (`Env::default_claude_dir`) or an added account's profile folder.
+pub struct ClaudeDirect {
+    pub dir: PathBuf,
+    /// The account ID part that identifies this login when it has no email, e.g. "claude-current".
+    pub local_id: String,
+}
 
 impl Provider for ClaudeDirect {
     fn kind(&self) -> SourceKind {
@@ -34,8 +40,8 @@ impl Provider for ClaudeDirect {
         Some(Service::Claude)
     }
 
-    fn detect(&self, env: &Env) -> bool {
-        env.claude_dir.join(".credentials.json").is_file()
+    fn detect(&self, _env: &Env) -> bool {
+        self.dir.join(".credentials.json").is_file()
     }
 
     fn fetch<'a>(&'a self, env: &'a Env) -> BoxFut<'a, Result<Vec<Reading>, FetchError>> {
@@ -46,7 +52,7 @@ impl Provider for ClaudeDirect {
                 expires_at_ms,
                 plan,
                 email,
-            } = read_login(&env.claude_dir, &env.home)?;
+            } = read_login(&self.dir, &env.home)?;
             if expires_at_ms <= now {
                 return Err(FetchError::Expired);
             }
@@ -66,9 +72,8 @@ impl Provider for ClaudeDirect {
                 )
                 .await?;
             drop(token);
-            let key = AccountKey::new(Service::Claude, email.as_deref(), LOCAL_ID);
-            let label = email.unwrap_or_else(|| UNNAMED_LABEL.to_string());
-            parse_usage(&body, key, label, plan, now).map(|reading| vec![reading])
+            let key = AccountKey::new(Service::Claude, email.as_deref(), self.local_id.as_str());
+            parse_usage(&body, key, LABEL.to_string(), plan, now).map(|reading| vec![reading])
         })
     }
 }
@@ -122,7 +127,7 @@ struct OauthAccount {
 }
 
 /// Reads the access token, its expiry and the plan from `<claude_dir>/.credentials.json`, and the account email
-/// from `<home>/.claude.json` (else `<claude_dir>/.claude.json`). Both files are only read, never locked or written.
+/// as `read_email` describes. Both files are only read, never locked or written.
 ///
 /// A missing credentials file is `NotDetected`. Truncated or mistyped JSON, or a missing `accessToken` or
 /// `expiresAt`, is a `Format` error. A missing email is not an error.
@@ -152,13 +157,17 @@ pub fn read_login(claude_dir: &Path, home: &Path) -> Result<ClaudeLogin, FetchEr
 }
 
 /// Best effort: any missing, unreadable or unexpected file just means no email. Claude Code keeps its config in
-/// `<home>/.claude.json`, or in `<claude_dir>/.claude.json` when `CLAUDE_CONFIG_DIR` moves it, so a moved
-/// `claude_dir` is read first.
+/// `<home>/.claude.json`, or in `<claude_dir>/.claude.json` when `CLAUDE_CONFIG_DIR` moves it.
+///
+/// For the default folder (`<home>/.claude`) both files are read, home first. For any other folder (a moved
+/// default or an added profile) only `<claude_dir>/.claude.json` is read: `<home>/.claude.json` names the
+/// default login, and borrowing its email would give the profile the wrong account ID.
 pub(crate) fn read_email(claude_dir: &Path, home: &Path) -> Option<String> {
-    let mut paths = [home.join(".claude.json"), claude_dir.join(".claude.json")];
-    if claude_dir != home.join(".claude") {
-        paths.swap(0, 1);
-    }
+    let paths = if claude_dir == home.join(".claude") {
+        vec![home.join(".claude.json"), claude_dir.join(".claude.json")]
+    } else {
+        vec![claude_dir.join(".claude.json")]
+    };
     paths.iter().find_map(|path| {
         let raw = std::fs::read(path).ok()?;
         let file: ClaudeJson = serde_json::from_slice(&raw).ok()?;
@@ -230,6 +239,7 @@ pub fn parse_usage(
         buckets,
         source: SourceKind::Direct,
         observed_at_ms: now_ms,
+        banked_resets: None,
     })
 }
 
@@ -335,6 +345,16 @@ mod tests {
         test_env(&home.0, HttpClient::for_test(base), now_ms)
     }
 
+    const LOCAL_ID: &str = "claude-current";
+
+    /// The source for the default `.claude` folder inside `home`.
+    fn source(home: &TempHome) -> ClaudeDirect {
+        ClaudeDirect {
+            dir: home.claude_dir(),
+            local_id: LOCAL_ID.into(),
+        }
+    }
+
     fn key() -> AccountKey {
         AccountKey::new(Service::Claude, Some("user@example.com"), LOCAL_ID)
     }
@@ -343,10 +363,66 @@ mod tests {
         parse_usage(
             body.as_bytes(),
             key(),
-            "user@example.com".into(),
+            "Claude".into(),
             Some("Pro".into()),
             now(),
         )
+    }
+
+    #[tokio::test]
+    async fn label_is_never_email() {
+        let home = TempHome::new("claude-label");
+        home.write(".claude/.credentials.json", CREDENTIALS);
+        home.write(".claude.json", CONFIG);
+        let server = MockServer::start(vec![(200, "", USAGE.to_string())]);
+        let env = env_for(&home, &server.base, now);
+
+        let readings = source(&home).fetch(&env).await.unwrap();
+
+        assert_eq!(readings[0].label, "Claude");
+        assert!(!readings[0].label.contains('@'));
+        assert_eq!(readings[0].banked_resets, None);
+        // The email still identifies the account.
+        assert_eq!(readings[0].key, key());
+    }
+
+    #[tokio::test]
+    async fn profile_dir_is_used() {
+        let home = TempHome::new("claude-profile");
+        let profile = home.0.join("profile-a");
+        let empty = home.0.join("profile-b");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::write(profile.join(".credentials.json"), CREDENTIALS).unwrap();
+        // The default login's config names an account. A profile must not borrow it.
+        home.write(".claude.json", CONFIG);
+        let server = MockServer::start(vec![
+            (200, "", USAGE.to_string()),
+            (200, "", USAGE.to_string()),
+        ]);
+        let env = env_for(&home, &server.base, now);
+        let in_profile = ClaudeDirect {
+            dir: profile.clone(),
+            local_id: "profile-a".into(),
+        };
+        let in_empty = ClaudeDirect {
+            dir: empty,
+            local_id: "profile-b".into(),
+        };
+
+        assert!(in_profile.detect(&env));
+        assert!(!in_empty.detect(&env));
+        assert!(!source(&home).detect(&env));
+        let readings = in_profile.fetch(&env).await.unwrap();
+        assert_eq!(readings[0].key.local_id, "profile-a");
+        assert_eq!(readings[0].key.email, None);
+        assert_eq!(readings[0].label, "Claude");
+        assert_eq!(in_empty.fetch(&env).await, Err(FetchError::NotDetected));
+
+        // The profile's own config names its account.
+        std::fs::write(profile.join(".claude.json"), CONFIG).unwrap();
+        let readings = in_profile.fetch(&env).await.unwrap();
+        assert_eq!(readings[0].key.email.as_deref(), Some("user@example.com"));
     }
 
     fn expected(name: &str, used_percent: f64, window_secs: u64, resets_at_ms: i64) -> Bucket {
@@ -369,7 +445,7 @@ mod tests {
             ]
         );
         assert_eq!(reading.key, key());
-        assert_eq!(reading.label, "user@example.com");
+        assert_eq!(reading.label, "Claude");
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
         assert_eq!(reading.source, SourceKind::Direct);
         assert_eq!(reading.observed_at_ms, now());
@@ -477,7 +553,7 @@ mod tests {
         let server = MockServer::start(vec![(200, "", USAGE.to_string())]);
         let env = env_for(&home, &server.base, after_expiry);
 
-        let result = ClaudeDirect.fetch(&env).await;
+        let result = source(&home).fetch(&env).await;
 
         assert_eq!(result, Err(FetchError::Expired));
         assert_eq!(server.hits(), 0);
@@ -524,14 +600,14 @@ mod tests {
     fn missing_credentials_is_not_detected() {
         let home = TempHome::new("claude-missing");
         let env = env_for(&home, "http://127.0.0.1:9", now);
-        assert!(!ClaudeDirect.detect(&env));
+        assert!(!source(&home).detect(&env));
         assert_eq!(
             read_login(&home.claude_dir(), &home.0).unwrap_err(),
             FetchError::NotDetected
         );
 
         home.write(".claude/.credentials.json", CREDENTIALS);
-        assert!(ClaudeDirect.detect(&env));
+        assert!(source(&home).detect(&env));
     }
 
     #[test]
@@ -567,10 +643,10 @@ mod tests {
         let server = MockServer::start(vec![(200, "", USAGE.to_string())]);
         let env = env_for(&home, &server.base, now);
 
-        let readings = ClaudeDirect.fetch(&env).await.unwrap();
+        let readings = source(&home).fetch(&env).await.unwrap();
 
         assert_eq!(readings.len(), 1);
-        assert_eq!(readings[0].label, "Claude (CLI login)");
+        assert_eq!(readings[0].label, "Claude");
         assert_eq!(readings[0].key.email, None);
         assert_eq!(readings[0].key.merge_key(), None);
     }
@@ -583,7 +659,7 @@ mod tests {
         let server = MockServer::start(vec![(200, "", USAGE.to_string())]);
         let env = env_for(&home, &server.base, now);
 
-        let readings = ClaudeDirect.fetch(&env).await.unwrap();
+        let readings = source(&home).fetch(&env).await.unwrap();
 
         let request = server.last_request.lock().unwrap().to_lowercase();
         assert!(request.starts_with("get /api/oauth/usage "));
@@ -595,7 +671,7 @@ mod tests {
         assert_eq!(readings.len(), 1);
         let reading = &readings[0];
         assert_eq!(reading.key, key());
-        assert_eq!(reading.label, "user@example.com");
+        assert_eq!(reading.label, "Claude");
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
         assert_eq!(reading.source, SourceKind::Direct);
         assert_eq!(reading.observed_at_ms, now());

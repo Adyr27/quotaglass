@@ -34,7 +34,7 @@ pub struct AccountKey {
     pub service: Service,
     /// Lowercased and trimmed. `None` means the account is never merged with another reading.
     pub email: Option<String>,
-    /// Distinguishes email-less accounts, e.g. "claude-direct" or an Orca account id.
+    /// Distinguishes email-less accounts, e.g. "claude-current" or an Orca account id.
     pub local_id: String,
 }
 
@@ -85,6 +85,8 @@ pub struct Reading {
     pub buckets: Vec<Bucket>,
     pub source: SourceKind,
     pub observed_at_ms: i64,
+    /// Codex only: banked rate-limit resets the account can redeem. `None` when the source does not say.
+    pub banked_resets: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

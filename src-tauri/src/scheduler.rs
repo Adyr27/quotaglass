@@ -210,8 +210,14 @@ impl Shared {
 impl Scheduler {
     pub fn new(env: Env, emit: impl Fn(&Snapshot) + Send + Sync + 'static) -> Self {
         let providers: Vec<Box<dyn Provider>> = vec![
-            Box::new(ClaudeDirect),
-            Box::new(CodexDirect),
+            Box::new(ClaudeDirect {
+                dir: env.default_claude_dir.clone(),
+                local_id: "claude-current".into(),
+            }),
+            Box::new(CodexDirect {
+                dir: env.default_codex_dir.clone(),
+                local_id: "codex-current".into(),
+            }),
             Box::new(Orca::new()),
         ];
         debug_assert_eq!(providers.len(), PROVIDERS);

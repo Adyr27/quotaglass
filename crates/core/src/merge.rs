@@ -260,6 +260,7 @@ mod tests {
                 .collect(),
             source,
             observed_at_ms: NOW,
+            banked_resets: None,
         }
     }
 

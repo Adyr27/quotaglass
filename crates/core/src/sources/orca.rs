@@ -223,6 +223,7 @@ fn reading(
         buckets,
         source: SourceKind::Orca,
         observed_at_ms,
+        banked_resets: None,
     })
 }
 

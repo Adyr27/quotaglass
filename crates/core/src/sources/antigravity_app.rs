@@ -139,6 +139,7 @@ async fn read_ports(
                     buckets,
                     source: SourceKind::AntigravityApp,
                     observed_at_ms: now_ms,
+                    banked_resets: None,
                 }]);
             }
             Err(e @ FetchError::Format(_)) => last = e,

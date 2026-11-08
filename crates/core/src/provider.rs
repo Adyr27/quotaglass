@@ -20,6 +20,8 @@ pub trait Provider: Send + Sync {
 
 #[derive(Debug, Clone)]
 pub struct SourceOutcome {
+    /// The scheduler task that produced this outcome, e.g. "claude-current" or an added account ID.
+    pub task_id: String,
     pub kind: SourceKind,
     /// Copied from `Provider::service()`.
     pub service: Option<Service>,

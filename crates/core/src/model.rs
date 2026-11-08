@@ -101,6 +101,8 @@ pub enum NetErrorKind {
 pub enum FetchError {
     NotDetected,
     Expired,
+    /// The profile folder of an added account is gone. Set by the scheduler, never by a source.
+    ProfileMissing,
     Disabled,
     Unavailable(&'static str),
     Format(&'static str),
@@ -114,6 +116,7 @@ impl FetchError {
         match self {
             FetchError::NotDetected => "Not found on this PC".into(),
             FetchError::Expired => "Login expired. Open the CLI once to refresh it.".into(),
+            FetchError::ProfileMissing => "Profile folder missing".into(),
             FetchError::Disabled => "Source turned off in settings".into(),
             FetchError::Unavailable(why) => (*why).into(),
             FetchError::Format(what) => format!("Unexpected data from the source ({what})"),

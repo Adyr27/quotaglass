@@ -25,6 +25,11 @@ export interface Card {
 const WARN_AT_PERCENT = 80;
 const MAX_ENTER_STAGGER = 8;
 
+/** An expired Claude or Codex login can be renewed from the card. */
+function canSignIn(view: AccountView): boolean {
+  return view.state === "loginExpired" && view.service !== "antigravity";
+}
+
 export function createCard(enterIndex: number): Card {
   let view: AccountView | null = null;
   let ctx: CardContext | null = null;
@@ -77,7 +82,7 @@ export function createCard(enterIndex: number): Card {
     if (ctx !== null && !ctx.refreshing) ctx.onRetry();
   });
   signIn.addEventListener("click", () => {
-    if (ctx !== null && view !== null && view.connect !== null) ctx.onSignIn(view.connect);
+    if (ctx !== null && view !== null && canSignIn(view)) ctx.onSignIn(view.service);
   });
 
   function update(next: AccountView, nextCtx: CardContext): void {
@@ -119,7 +124,7 @@ export function createCard(enterIndex: number): Card {
       fill.style.setProperty("--p", String(usedRatio(headline.usedPercent)));
     }
 
-    const extra = next.extraBuckets;
+    const extra = Math.max(next.buckets.length - 1, 0);
     show(more, headline !== null && extra > 0);
     setText(more, `+${extra}`);
     setAttr(more, "aria-label", `+${extra} more ${extra === 1 ? "limit" : "limits"} for ${next.label}`);
@@ -141,12 +146,12 @@ export function createCard(enterIndex: number): Card {
 
     const reason = next.reason ?? "";
     const showNote = next.state !== "ok" && reason !== "";
-    const canRetry = next.state === "error" || next.state === "noSource";
+    const canRetry = next.state === "error" || next.state === "noSource" || next.state === "loginExpired";
     setText(note, reason);
     show(note, showNote);
     note.classList.toggle("is-warn", next.state === "error");
     show(actions, canRetry);
-    show(signIn, next.state === "noSource" && next.connect !== null);
+    show(signIn, canSignIn(next));
     show(foot, showNote || canRetry);
     retry.classList.toggle("is-disabled", nextCtx.refreshing);
     setAttr(retry, "aria-disabled", nextCtx.refreshing ? "true" : null);

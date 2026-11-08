@@ -1,13 +1,13 @@
 // The settings panel. Every change saves at once through the callbacks.
 
-import type { Settings, SourceStatus, SwitchableSource } from "../types";
+import type { Connection, Detected, Settings } from "../types";
 import { createSwitch, h, type Switch } from "./dom";
 import { createSourceRows } from "./sources";
 
 export interface SettingsDeps {
   onRefreshMinutes(minutes: number): void;
   onToggle(key: "alwaysOnTop" | "autostart", next: boolean): void;
-  onSource(kind: SwitchableSource, next: boolean): void;
+  onSource(kind: Connection, next: boolean): void;
   onClose(): void;
 }
 
@@ -15,7 +15,7 @@ export interface SettingsPanel {
   readonly el: HTMLElement;
   /** Receives focus when the panel opens. */
   readonly heading: HTMLElement;
-  update(settings: Settings, rows: readonly SourceStatus[]): void;
+  update(settings: Settings, detected: Detected | null): void;
 }
 
 const MINUTE_CHOICES = [1, 2, 3, 4, 5] as const;
@@ -63,7 +63,7 @@ export function createSettings(deps: SettingsDeps): SettingsPanel {
     h("div", { class: "panel-foot" }, [close]),
   ]);
 
-  function update(settings: Settings, rows: readonly SourceStatus[]): void {
+  function update(settings: Settings, detected: Detected | null): void {
     const selected = MINUTE_CHOICES.findIndex((minutes) => minutes === settings.refreshMinutes);
     radios.forEach((radio, index) => {
       radio.setAttribute("aria-checked", index === selected ? "true" : "false");
@@ -71,7 +71,7 @@ export function createSettings(deps: SettingsDeps): SettingsPanel {
     });
     onTop.toggle.set(settings.alwaysOnTop);
     autostart.toggle.set(settings.autostart);
-    sources.update(rows);
+    sources.update(detected, settings.connected);
   }
 
   return { el, heading, update };

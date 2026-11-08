@@ -18,6 +18,10 @@ pub enum CardState {
     NoReadingYet,
     Error,
     NoSource,
+    /// The login of a Claude or Codex account ran out. The user opens the CLI to sign in again.
+    LoginExpired,
+    /// The profile folder of an added account is gone.
+    ProfileMissing,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -29,6 +33,10 @@ pub struct BucketView {
     pub resets_at_ms: Option<i64>,
     pub limit_reached: bool,
     pub freshness: Freshness,
+    /// Share of the window that has passed, 0..=100. `None` without a window length and a reset time.
+    pub passed_percent: Option<f64>,
+    /// Usage runs well ahead of the clock (`pace::fast_burn`).
+    pub fast_burn: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -37,21 +45,29 @@ pub struct AccountView {
     /// `AccountKey::store_key()`; stable across refreshes.
     pub id: String,
     pub service: Service,
+    /// The user's label when set, else the source's default. Never an email.
     pub label: String,
     pub plan: Option<String>,
     pub source: Option<SourceKind>,
-    /// Every source that has a reading for this account, in priority order. Used by the source picker.
-    pub sources: Vec<SourceKind>,
     /// Freshness of the headline bucket; `Stale` when there is no headline.
     pub freshness: Freshness,
     pub age_secs: Option<u64>,
     pub headline: Option<BucketView>,
-    pub extra_buckets: u32,
     pub buckets: Vec<BucketView>,
     pub state: CardState,
     pub reason: Option<String>,
-    /// Set only when a sign-in tool for this service is installed (Claude, Codex).
-    pub connect: Option<Service>,
+    /// `100 - max(used %)` over the buckets that are not stale.
+    pub room_left: Option<f64>,
+    /// The account with the most room left now (`pace::best_now`).
+    pub best_now: bool,
+    /// Codex only: banked rate-limit resets. `None` when the source does not say.
+    pub banked_resets: Option<u32>,
+    /// The ID of the added account (its profile) that reads this account.
+    pub profile_id: Option<String>,
+    /// True when the current CLI or app login reads this account.
+    pub current_login: bool,
+    pub pinned: bool,
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

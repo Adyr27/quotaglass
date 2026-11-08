@@ -2,7 +2,7 @@
 
 import {
   connect,
-  detectSources,
+  detect,
   getSettings,
   getSnapshot,
   onBackdrop,
@@ -13,7 +13,7 @@ import {
   setProblemListener,
   updateSettings,
 } from "./ipc";
-import type { AccountView, Connection, Service, Settings, SettingsPatch, Snapshot, SourceStatus, SourceSwitches, SwitchableSource } from "./types";
+import type { AccountView, Connection, Detected, Service, Settings, SettingsPatch, Snapshot } from "./types";
 import { createBoard, type BoardView } from "./view/board";
 import { h, iconPin, iconRefresh, iconSliders, markRing, setAttr, show } from "./view/dom";
 import { createOverlay } from "./view/overlay";
@@ -22,9 +22,9 @@ import { createSourceRows } from "./view/sources";
 
 let snapshot: Snapshot | null = null;
 let settings: Settings | null = null;
-let detected: SourceStatus[] | null = null;
-/** First run only: the switches as the person sets them, saved when they press Done. */
-let draft: SourceSwitches | null = null;
+let detected: Detected | null = null;
+/** First run only: the connections as the person switches them, saved when they press Done. */
+let draft: Connection[] | null = null;
 /** Set once Done is pressed, or at load when sources are already connected, so an empty `connected` list does not bring the first-run panel back this session. */
 let firstRunDismissed = false;
 /** Chip and group state for this session only. The UI rebuild replaces it. */
@@ -60,15 +60,15 @@ const board = createBoard({
   onToggleGroup: (service) => toggleIn("collapsed", service),
 });
 
-const firstRunRows = createSourceRows("first", (kind: SwitchableSource, next: boolean) => {
-  if (draft !== null) draft = { ...draft, [kind]: next };
+const firstRunRows = createSourceRows("first", (kind: Connection, next: boolean) => {
+  draft = toggled(draft ?? settings?.connected ?? [], kind, next);
   render();
 });
 const firstRunDone = h("button", { class: "btn btn-primary", type: "button" }, ["Done"]);
 const firstRunHeading = h("h2", { class: "panel-title", id: "first-title", tabindex: -1 }, ["Sources"]);
 const firstRun = h("section", { class: "panel", "aria-labelledby": "first-title" }, [
   firstRunHeading,
-  h("p", { class: "panel-text" }, ["QuotaGlass reads these on this PC. Turn off any you do not want."]),
+  h("p", { class: "panel-text" }, ["QuotaGlass reads nothing until you turn a source on."]),
   firstRunRows.el,
   h("div", { class: "panel-foot" }, [firstRunDone]),
 ]);
@@ -77,7 +77,7 @@ const settingsPanel = createSettings({
   onRefreshMinutes: (minutes) => void apply({ refreshMinutes: minutes }),
   onToggle: (key, next) => void apply({ [key]: next }),
   onSource: (kind, next) => {
-    if (settings !== null) void apply({ connected: connectionsFrom({ ...switchesOf(settings.connected), [kind]: next }, settings.connected) });
+    if (settings !== null) void apply({ connected: toggled(settings.connected, kind, next) });
   },
   onClose: () => closeSettings(),
 });
@@ -110,8 +110,8 @@ function render(): void {
 
   if (snapshot !== null && settings !== null) board.update(snapshot, boardView satisfies BoardView, nowMs, refreshing);
   if (settings !== null) {
-    settingsPanel.update(settings, withEnabled(detected, switchesOf(settings.connected)));
-    firstRunRows.update(withEnabled(detected, draft ?? switchesOf(settings.connected)));
+    settingsPanel.update(settings, detected);
+    firstRunRows.update(detected, draft ?? settings.connected);
   }
   firstRunDone.classList.toggle("is-disabled", saving);
   setAttr(firstRunDone, "aria-disabled", saving ? "true" : null);
@@ -123,28 +123,14 @@ function render(): void {
   }
 }
 
-function withEnabled(rows: SourceStatus[] | null, switches: SourceSwitches): SourceStatus[] {
-  return (rows ?? []).map((row) => ({ ...row, enabled: switches[row.kind] }));
-}
-
 function isFirstRun(): boolean {
   return settings !== null && settings.connected.length === 0 && !firstRunDismissed;
 }
 
-// TODO(v0.2-task7): remove this switches <-> `connected` bridge with the UI rebuild.
-/** Bridge from the v0.1.0 switches to `connected` until the UI rebuild. Antigravity is kept as it is. */
-function switchesOf(connected: readonly Connection[]): SourceSwitches {
-  return {
-    direct: connected.includes("claudeCurrent") || connected.includes("codexCurrent"),
-    orca: connected.includes("orca"),
-  };
-}
-
-function connectionsFrom(switches: SourceSwitches, current: readonly Connection[]): Connection[] {
-  const out: Connection[] = current.filter((c) => c === "antigravityApp");
-  if (switches.direct) out.push("claudeCurrent", "codexCurrent");
-  if (switches.orca) out.push("orca");
-  return out;
+/** `current` with `kind` switched on or off. Order is kept; a new entry goes last. */
+function toggled(current: readonly Connection[], kind: Connection, on: boolean): Connection[] {
+  const rest = current.filter((c) => c !== kind);
+  return on ? [...rest, kind] : rest;
 }
 
 function findAccount(id: string): AccountView | null {
@@ -189,17 +175,10 @@ function closeSettings(): void {
 }
 
 async function loadSources(): Promise<void> {
-  const result = await detectSources();
+  const result = await detect();
   if (!result.ok) return;
   detected = result.value;
-  if (draft === null && isFirstRun()) draft = switchesFrom(result.value);
   render();
-}
-
-function switchesFrom(rows: readonly SourceStatus[]): SourceSwitches {
-  const out: SourceSwitches = { direct: false, orca: false };
-  for (const row of rows) out[row.kind] = row.enabled;
-  return out;
 }
 
 async function apply(patch: SettingsPatch): Promise<void> {
@@ -219,7 +198,7 @@ async function finishFirstRun(): Promise<void> {
   saving = true;
   render();
   const patch: SettingsPatch = {};
-  if (draft !== null) patch.connected = connectionsFrom(draft, settings?.connected ?? []);
+  if (draft !== null) patch.connected = draft;
   const result = await updateSettings(patch);
   saving = false;
   if (result.ok) {

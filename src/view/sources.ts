@@ -1,55 +1,57 @@
-// The Sources rows. The first-run panel and the settings panel both use them.
+// The Sources rows, one per `connected` entry. The first-run panel and the settings panel both use them.
 
-import { SOURCE_ORDER, sourceRowName } from "../format";
-import type { SourceStatus, SwitchableSource } from "../types";
-import { createSwitch, h, setText, show, type Switch } from "./dom";
+import { CONNECTION_ORDER, sourceRowName } from "../format";
+import type { Connection, Detected } from "../types";
+import { createSwitch, h, setText, type Switch } from "./dom";
 
 export interface SourceRows {
   readonly el: HTMLElement;
-  /** Shows one row per status. A source missing from `rows` is hidden. */
-  update(rows: readonly SourceStatus[]): void;
+  /** `detected` is null until the first check answers; `on` is the list of switched-on connections. */
+  update(detected: Detected | null, on: readonly Connection[]): void;
 }
 
 interface Row {
-  el: HTMLElement;
   statusText: HTMLElement;
-  unofficial: HTMLElement;
   toggle: Switch;
 }
 
+const DETECTED_KEY: Record<Connection, keyof Detected> = {
+  claudeCurrent: "claude",
+  codexCurrent: "codex",
+  antigravityApp: "antigravityApp",
+  orca: "orca",
+};
+
+function statusOf(kind: Connection, detected: Detected | null): string {
+  if (detected === null) return "";
+  if (kind === "antigravityApp") return "Read while the app runs";
+  return detected[DETECTED_KEY[kind]] ? "Found" : "Not found";
+}
+
 /** `prefix` keeps element ids unique when two panels are in the page at once. */
-export function createSourceRows(
-  prefix: string,
-  onToggle: (kind: SwitchableSource, next: boolean) => void,
-): SourceRows {
-  const rows = new Map<SwitchableSource, Row>();
+export function createSourceRows(prefix: string, onToggle: (kind: Connection, next: boolean) => void): SourceRows {
+  const rows = new Map<Connection, Row>();
   const el = h("div", { class: "src-rows" });
 
-  for (const kind of SOURCE_ORDER) {
+  for (const kind of CONNECTION_ORDER) {
     const nameId = `${prefix}-${kind}-name`;
     const statusId = `${prefix}-${kind}-status`;
     const statusText = h("span");
-    const unofficial = h("span", { class: "pill" }, ["Unofficial endpoint"]);
-    const status = h("div", { class: "src-status", id: statusId }, [statusText, unofficial]);
+    const status = h("div", { class: "src-status", id: statusId }, [statusText]);
     const text = h("div", { class: "src-text" }, [h("span", { class: "src-name", id: nameId }, [sourceRowName(kind)]), status]);
     const toggle = createSwitch({
       labelledBy: nameId,
       describedBy: statusId,
       onChange: (next) => onToggle(kind, next),
     });
-    const row = h("div", { class: "src-row" }, [text, toggle.el]);
-    rows.set(kind, { el: row, statusText, unofficial, toggle });
-    el.append(row);
+    el.append(h("div", { class: "src-row" }, [text, toggle.el]));
+    rows.set(kind, { statusText, toggle });
   }
 
-  function update(statuses: readonly SourceStatus[]): void {
+  function update(detected: Detected | null, on: readonly Connection[]): void {
     for (const [kind, row] of rows) {
-      const found = statuses.find((s) => s.kind === kind);
-      show(row.el, found !== undefined);
-      if (found === undefined) continue;
-      setText(row.statusText, found.detected ? "Found" : "Not found");
-      show(row.unofficial, found.unofficial);
-      row.toggle.set(found.enabled);
+      setText(row.statusText, statusOf(kind, detected));
+      row.toggle.set(on.includes(kind));
     }
   }
 

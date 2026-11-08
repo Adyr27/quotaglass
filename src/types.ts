@@ -4,12 +4,9 @@ export type Service = "claude" | "codex" | "antigravity";
 
 export type SourceKind = "direct" | "antigravityApp" | "orca";
 
-/** The sources a person can switch on or off in the Sources rows. */
-export type SwitchableSource = "direct" | "orca";
-
 export type Freshness = "live" | "aged" | "stale";
 
-export type CardState = "ok" | "noReadingYet" | "error" | "noSource";
+export type CardState = "ok" | "noReadingYet" | "error" | "noSource" | "loginExpired" | "profileMissing";
 
 export interface BucketView {
   name: string;
@@ -18,6 +15,9 @@ export interface BucketView {
   resetsAtMs: number | null;
   limitReached: boolean;
   freshness: Freshness;
+  /** Share of the window that has passed, 0..100. Null without a window length and a reset time. */
+  passedPercent: number | null;
+  fastBurn: boolean;
 }
 
 export interface AccountView {
@@ -26,16 +26,22 @@ export interface AccountView {
   label: string;
   plan: string | null;
   source: SourceKind | null;
-  /** Every source with a reading for this account, in display order. */
-  sources: SourceKind[];
   freshness: Freshness;
   ageSecs: number | null;
   headline: BucketView | null;
-  extraBuckets: number;
   buckets: BucketView[];
   state: CardState;
   reason: string | null;
-  connect: Service | null;
+  /** 100 minus the highest used % over the limits that still hold. */
+  roomLeft: number | null;
+  bestNow: boolean;
+  /** Codex only. Null when the source does not say. */
+  bankedResets: number | null;
+  /** The added account (profile) that reads this account. */
+  profileId: string | null;
+  currentLogin: boolean;
+  pinned: boolean;
+  hidden: boolean;
 }
 
 export interface Snapshot {
@@ -49,8 +55,6 @@ export interface WindowRect {
   width: number;
   height: number;
 }
-
-export type SourceSwitches = Record<SwitchableSource, boolean>;
 
 export type Theme = "system" | "light" | "dark";
 
@@ -98,11 +102,12 @@ export type SettingsPatch = Partial<
   >
 >;
 
-export interface SourceStatus {
-  kind: SwitchableSource;
-  detected: boolean;
-  enabled: boolean;
-  unofficial: boolean;
+/** Which one-click sources apply on this PC. `antigravityApp` is always true: its fetch decides. */
+export interface Detected {
+  claude: boolean;
+  codex: boolean;
+  antigravityApp: boolean;
+  orca: boolean;
 }
 
 export interface BackdropPayload {

@@ -3,7 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { BackdropPayload, Service, Settings, SettingsPatch, Snapshot, SourceStatus } from "./types";
+import type { BackdropPayload, Detected, Service, Settings, SettingsPatch, Snapshot } from "./types";
 
 export type Result<T> = { ok: true; value: T } | { ok: false };
 
@@ -69,8 +69,8 @@ export function refreshNow(): Promise<Result<void>> {
   return call<void>("refresh_now", "Could not refresh.");
 }
 
-export function detectSources(): Promise<Result<SourceStatus[]>> {
-  return call<SourceStatus[]>("detect_sources", "Could not check this PC for sources.");
+export function detect(): Promise<Result<Detected>> {
+  return call<Detected>("detect", "Could not check this PC for sources.");
 }
 
 export function getSettings(): Promise<Result<Settings>> {

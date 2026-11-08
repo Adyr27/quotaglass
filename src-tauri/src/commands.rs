@@ -1,10 +1,9 @@
 //! The only functions the UI can call. Errors are fixed short strings; nothing secret passes through here.
 
-use crate::scheduler::{lock, switches, Scheduler};
+use crate::scheduler::{lock, Detected, Scheduler};
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 use quotaglass_core::view::Snapshot;
-use quotaglass_core::{Service, SourceKind};
-use serde::Serialize;
+use quotaglass_core::Service;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
@@ -16,15 +15,6 @@ pub struct AppState {
     pub scheduler: Scheduler,
     /// False once the acrylic backdrop failed to apply; the UI then draws its own solid background.
     pub acrylic: AtomicBool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceStatus {
-    kind: SourceKind,
-    detected: bool,
-    enabled: bool,
-    unofficial: bool,
 }
 
 pub fn emit_backdrop(app: &AppHandle, acrylic: bool) {
@@ -89,25 +79,10 @@ pub fn refresh_now(app: AppHandle) {
     app.state::<AppState>().scheduler.refresh_now();
 }
 
+/// Which one-click sources apply on this PC. The UI reads `connected` from the settings for what is on.
 #[tauri::command]
-pub fn detect_sources(app: AppHandle) -> Vec<SourceStatus> {
-    let state = app.state::<AppState>();
-    let (direct, orca) = state.scheduler.detected();
-    let on = switches(&lock(&state.settings));
-    vec![
-        SourceStatus {
-            kind: SourceKind::Direct,
-            detected: direct,
-            enabled: on.direct,
-            unofficial: true,
-        },
-        SourceStatus {
-            kind: SourceKind::Orca,
-            detected: orca,
-            enabled: on.orca,
-            unofficial: false,
-        },
-    ]
+pub fn detect(app: AppHandle) -> Detected {
+    app.state::<AppState>().scheduler.detected()
 }
 
 #[tauri::command]

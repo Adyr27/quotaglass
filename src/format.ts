@@ -1,6 +1,6 @@
 // Pure formatting helpers. No DOM, no IPC, no hidden clock: callers pass `nowMs`.
 
-import type { AccountView, BucketView, Freshness, Service, SourceKind, SwitchableSource } from "./types";
+import type { AccountView, BucketView, Connection, Freshness, Service, SourceKind } from "./types";
 
 export const SERVICE_ORDER: readonly Service[] = ["claude", "codex", "antigravity"];
 
@@ -10,26 +10,28 @@ export const SERVICE_NAME: Record<Service, string> = {
   antigravity: "Antigravity",
 };
 
-export const SOURCE_ORDER: readonly SwitchableSource[] = ["direct", "orca"];
+export const CONNECTION_ORDER: readonly Connection[] = ["claudeCurrent", "codexCurrent", "antigravityApp", "orca"];
 
 /** Short source names for the meta line of a card. */
 const SOURCE_TAG: Record<SourceKind, string> = {
-  direct: "direct (unofficial)",
+  direct: "direct",
   antigravityApp: "Antigravity app",
   orca: "Orca",
 };
 
-/** Names for the rows of the Sources panel. */
-const SOURCE_ROW_NAME: Record<SwitchableSource, string> = {
-  direct: "Claude Code and Codex login files",
-  orca: "Orca",
+/** Names for the rows of the Sources panel, one per `connected` entry. */
+const SOURCE_ROW_NAME: Record<Connection, string> = {
+  claudeCurrent: "Use my current Claude login",
+  codexCurrent: "Use my current Codex login",
+  antigravityApp: "Use my Antigravity app",
+  orca: "Connect Orca (optional)",
 };
 
 export function sourceTag(kind: SourceKind): string {
   return SOURCE_TAG[kind] ?? kind;
 }
 
-export function sourceRowName(kind: SwitchableSource): string {
+export function sourceRowName(kind: Connection): string {
   return SOURCE_ROW_NAME[kind] ?? kind;
 }
 

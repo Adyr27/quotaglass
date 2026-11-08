@@ -61,7 +61,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::refresh_now,
-            commands::detect_sources,
+            commands::detect,
             commands::get_settings,
             commands::update_settings,
             commands::connect,

@@ -84,6 +84,12 @@ pub fn get_snapshot(app: AppHandle) -> Snapshot {
     state.scheduler.snapshot()
 }
 
+/// The UI's zoom: device px per CSS px. Windows text size changes it, so the window follows it.
+#[tauri::command]
+pub async fn set_zoom(app: AppHandle, zoom: f64) -> Result<(), String> {
+    window::set_zoom(&app, zoom).map_err(|_| "Could not resize the window.".to_string())
+}
+
 /// Opens the panel from the pill, or closes it back to the pill. True: the panel grew upward.
 #[tauri::command]
 pub async fn set_panel_open(app: AppHandle, open: bool) -> Result<bool, String> {
@@ -625,7 +631,7 @@ mod tests {
             .map(|p| p.replace('-', "_"))
             .collect();
 
-        assert_eq!(handlers.len(), 15, "{handlers:?}");
+        assert_eq!(handlers.len(), 16, "{handlers:?}");
         assert!(handlers.contains("detect"));
         assert_eq!(manifest, handlers, "build.rs AppManifest::commands");
         assert_eq!(allowed, handlers, "capabilities/main.json allow-* entries");

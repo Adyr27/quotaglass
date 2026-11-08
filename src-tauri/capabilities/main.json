@@ -22,6 +22,7 @@
     "allow-set-label",
     "allow-connect-source",
     "allow-open-url",
-    "allow-set-panel-open"
+    "allow-set-panel-open",
+    "allow-set-zoom"
   ]
 }

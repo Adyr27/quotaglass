@@ -19,6 +19,7 @@ import {
   setHidden,
   setLabel,
   setPanelOpen,
+  setZoom,
   setPinned,
   setProblemListener,
   updateSettings,
@@ -209,6 +210,13 @@ document.addEventListener("keydown", (event) => {
   }
   void setOpen(false).then(() => pill.chevron.focus({ preventScroll: true }));
 });
+
+/** Windows text size zooms the web view; the window is sized from this zoom, and follows changes. */
+function watchZoom(): void {
+  void setZoom(window.devicePixelRatio);
+  matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", watchZoom, { once: true });
+}
+watchZoom();
 
 // Listeners go first so an event that fires while the first load runs is not missed.
 void Promise.all([

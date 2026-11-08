@@ -141,6 +141,10 @@ export function onOpenSettings(handler: () => void): Promise<void> {
   return subscribe<null>("open-settings", () => handler());
 }
 
+export function setZoom(zoom: number): Promise<Result<void>> {
+  return call<void>("set_zoom", "Could not resize the window.", { zoom });
+}
+
 /** Resolves to true while the panel extends above the pill. */
 export function setPanelOpen(open: boolean): Promise<Result<boolean>> {
   return call<boolean>("set_panel_open", "Could not resize the window.", { open });

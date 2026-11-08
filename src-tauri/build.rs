@@ -17,6 +17,7 @@ fn main() {
         "connect_source",
         "open_url",
         "set_panel_open",
+        "set_zoom",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

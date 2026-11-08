@@ -73,6 +73,10 @@ export interface AddedAccount {
 export interface Settings {
   version: 2;
   pillPosition: WindowRect | null;
+  /** The panel size in CSS px as the person left it. */
+  panelSize: { width: number; height: number } | null;
+  /** The pill width in CSS px. */
+  pillWidth: number | null;
   alwaysOnTop: boolean;
   autostart: boolean;
   refreshMinutes: number;

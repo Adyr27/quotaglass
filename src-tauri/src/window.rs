@@ -2,7 +2,7 @@
 
 use crate::commands::{emit_backdrop, AppState};
 use crate::scheduler::lock;
-use crate::settings::{Material, Theme, WindowRect};
+use crate::settings::{Material, PanelSize, Theme, WindowRect, PANEL_MIN, PILL_WIDTH};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -53,7 +53,8 @@ pub fn clamp_to_monitors(rect: WindowRect, monitors: &[MonitorRect]) -> WindowRe
 
 /// Pill and panel sizes in logical px; multiply by the monitor's scale factor.
 pub const PILL: (u32, u32) = (440, 44);
-pub const PANEL: (u32, u32) = (440, 344);
+/// The panel's first size; the person can resize it, down to `PANEL_MIN`.
+pub const PANEL: (u32, u32) = (520, 400);
 
 /// Where the pill goes on first run: bottom-right of the work area, `MARGIN` (scaled) from both edges.
 pub fn default_pill_rect(work: MonitorRect, scale: f64) -> WindowRect {
@@ -70,6 +71,8 @@ pub fn default_pill_rect(work: MonitorRect, scale: f64) -> WindowRect {
 /// The panel opens from the pill: same left and bottom edges (grows up) when it fits above,
 /// else same top edge (grows down); then it is moved to fit inside `work`.
 pub fn panel_rect(pill: WindowRect, panel_w: u32, panel_h: u32, work: MonitorRect) -> WindowRect {
+    // A saved size from a larger monitor is shrunk to fit this one.
+    let (panel_w, panel_h) = (panel_w.min(work.width), panel_h.min(work.height));
     let (top, left) = (i64::from(work.y), i64::from(work.x));
     let bottom = top + i64::from(work.height);
     let right = left + i64::from(work.width);
@@ -90,17 +93,20 @@ pub fn panel_rect(pill: WindowRect, panel_w: u32, panel_h: u32, work: MonitorRec
     }
 }
 
-/// Where the pill goes when the panel closes: the same offset from the panel as when it opened,
-/// so a panel dragged while open brings the pill with it.
-pub fn pill_after_close(
-    open_pill: WindowRect,
-    open_panel: WindowRect,
-    panel_now: WindowRect,
-) -> WindowRect {
+/// Where the pill goes when the panel closes: on the panel's left edge, at its bottom when the
+/// panel grew up and at its top when it grew down. A panel dragged or resized while open keeps
+/// the pill on that edge.
+pub fn pill_after_close(pill_w: u32, pill_h: u32, panel_now: WindowRect, up: bool) -> WindowRect {
+    let y = if up {
+        i64::from(panel_now.y) + i64::from(panel_now.height) - i64::from(pill_h)
+    } else {
+        i64::from(panel_now.y)
+    };
     WindowRect {
-        x: open_pill.x - open_panel.x + panel_now.x,
-        y: open_pill.y - open_panel.y + panel_now.y,
-        ..open_pill
+        x: panel_now.x,
+        y: y as i32,
+        width: pill_w,
+        height: pill_h,
     }
 }
 
@@ -119,6 +125,28 @@ pub struct WindowState {
     open: Mutex<Option<(WindowRect, WindowRect)>>,
     panel_open: AtomicBool,
     dark: AtomicBool,
+    /// The UI's zoom (device px per CSS px) as f64 bits; 0 until the UI reports it.
+    zoom: AtomicU64,
+}
+
+/// The UI's zoom, or the monitor scale until the UI has reported it. Windows text size
+/// (Accessibility) zooms the web view on top of the monitor scale, so only the UI knows it.
+fn zoom(app: &AppHandle, fallback: f64) -> f64 {
+    match app.state::<WindowState>().zoom.load(Ordering::Relaxed) {
+        0 => fallback,
+        bits => f64::from_bits(bits),
+    }
+}
+
+fn pill_size(css_width: Option<u32>, z: f64) -> (u32, u32) {
+    (scaled(css_width.unwrap_or(PILL.0), z), scaled(PILL.1, z))
+}
+
+/// The pill stretches sideways only: its height is pinned by equal min and max heights.
+fn pill_limits(window: &WebviewWindow, z: f64) -> tauri::Result<()> {
+    let h = scaled(PILL.1, z);
+    window.set_min_size(Some(PhysicalSize::new(scaled(PILL_WIDTH.0, z), h)))?;
+    window.set_max_size(Some(PhysicalSize::new(scaled(PILL_WIDTH.1, z), h)))
 }
 
 struct Screen {
@@ -197,23 +225,25 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<AppState>();
     let settings = lock(&state.settings).clone();
 
-    // The pill size is fixed; only its place is saved.
+    // The place is saved in device px, the width in CSS px; the UI's zoom corrects the size once it loads.
     let start = match settings.pill_position {
         Some(saved) => screen_for(&window, saved).map(|s| {
+            let (width, height) = pill_size(settings.pill_width, s.scale);
             let sized = WindowRect {
-                width: scaled(PILL.0, s.scale),
-                height: scaled(PILL.1, s.scale),
+                width,
+                height,
                 ..saved
             };
-            clamp_to_monitors(sized, &monitor_rects(&window))
+            (clamp_to_monitors(sized, &monitor_rects(&window)), s.scale)
         }),
         None => window
             .primary_monitor()?
             .map(|m| to_screen(&m))
-            .map(|s| default_pill_rect(s.work, s.scale)),
+            .map(|s| (default_pill_rect(s.work, s.scale), s.scale)),
     };
-    if let Some(rect) = start {
+    if let Some((rect, scale)) = start {
         place(&window, rect)?;
+        pill_limits(&window, scale)?;
     }
 
     apply_look(app, settings.theme, settings.material);
@@ -319,26 +349,92 @@ pub fn set_panel_open(app: &AppHandle, open: bool) -> tauri::Result<bool> {
     let ws = app.state::<WindowState>();
     let mut slot = lock(&ws.open);
     let now = current_rect(&window)?;
+    let state = app.state::<AppState>();
+    // Copied out: the settings lock is never held while a window call waits on the main thread.
+    let (panel_size, pill_width) = {
+        let s = lock(&state.settings);
+        (s.panel_size, s.pill_width)
+    };
+    let Some(screen) = screen_for(&window, now) else {
+        return Ok(false);
+    };
+    let z = zoom(app, screen.scale);
     if open {
         if let Some((pill, panel)) = *slot {
             return Ok(panel.y < pill.y);
         }
-        let Some(screen) = screen_for(&window, now) else {
-            return Ok(false);
-        };
-        let (w, h) = (scaled(PANEL.0, screen.scale), scaled(PANEL.1, screen.scale));
-        let panel = panel_rect(now, w, h, screen.work);
+        let (w, h) = panel_size.map_or(PANEL, |p| (p.width, p.height));
+        let panel = panel_rect(now, scaled(w, z), scaled(h, z), screen.work);
         // Set before resizing, so the resize is not saved as the pill's place.
         ws.panel_open.store(true, Ordering::SeqCst);
+        window.set_max_size(None::<PhysicalSize<u32>>)?;
         place(&window, panel)?;
+        window.set_min_size(Some(PhysicalSize::new(
+            scaled(PANEL_MIN.0, z),
+            scaled(PANEL_MIN.1, z),
+        )))?;
         *slot = Some((now, panel));
         return Ok(panel.y < now.y);
     } else if let Some((pill, panel)) = slot.take() {
-        let back = clamp_to_monitors(pill_after_close(pill, panel, now), &monitor_rects(&window));
+        // Keep the size the person left the panel at, in CSS px.
+        {
+            let mut s = lock(&state.settings);
+            s.panel_size = Some(PanelSize {
+                width: (f64::from(now.width) / z).round() as u32,
+                height: (f64::from(now.height) / z).round() as u32,
+            });
+            s.clamp();
+            if state.store.save(&s).is_err() {
+                tracing::warn!("could not save the panel size");
+            }
+        }
+        let (w, h) = pill_size(pill_width, z);
+        let back = clamp_to_monitors(
+            pill_after_close(w, h, now, panel.y < pill.y),
+            &monitor_rects(&window),
+        );
+        window.set_min_size(None::<PhysicalSize<u32>>)?;
         place(&window, back)?;
+        pill_limits(&window, z)?;
         ws.panel_open.store(false, Ordering::SeqCst);
     }
     Ok(false)
+}
+
+/// The UI reports its zoom; the pill is resized to match, keeping its bottom-left corner.
+pub fn set_zoom(app: &AppHandle, z: f64) -> tauri::Result<()> {
+    if !z.is_finite() {
+        return Ok(());
+    }
+    let z = z.clamp(0.5, 5.0);
+    let ws = app.state::<WindowState>();
+    ws.zoom.store(z.to_bits(), Ordering::Relaxed);
+    // Same lock as `set_panel_open`, so a resize never runs while the panel opens or closes.
+    let slot = lock(&ws.open);
+    if slot.is_some() {
+        return Ok(()); // the next close sizes the pill
+    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or(tauri::Error::WindowNotFound)?;
+    let pill_width = lock(&app.state::<AppState>().settings).pill_width;
+    let now = current_rect(&window)?;
+    let (w, h) = pill_size(pill_width, z);
+    let grown = WindowRect {
+        x: now.x,
+        y: now.y + now.height as i32 - h as i32,
+        width: w,
+        height: h,
+    };
+    // panel_rect with the pill's own size only moves it inside the work area.
+    let fitted = match screen_for(&window, grown) {
+        Some(s) => panel_rect(grown, w, h, s.work),
+        None => grown,
+    };
+    window.set_min_size(None::<PhysicalSize<u32>>)?;
+    window.set_max_size(None::<PhysicalSize<u32>>)?;
+    place(&window, fitted)?;
+    pill_limits(&window, z)
 }
 
 fn save_current(app: &AppHandle) {
@@ -355,12 +451,16 @@ fn save_current(app: &AppHandle) {
         return;
     };
 
+    let z = zoom(app, screen_for(&window, rect).map_or(1.0, |s| s.scale));
+    let width = ((f64::from(rect.width) / z).round() as u32).clamp(PILL_WIDTH.0, PILL_WIDTH.1);
+
     let state = app.state::<AppState>();
     let mut settings = lock(&state.settings);
-    if settings.pill_position == Some(rect) {
+    if settings.pill_position == Some(rect) && settings.pill_width == Some(width) {
         return;
     }
     settings.pill_position = Some(rect);
+    settings.pill_width = Some(width);
     if state.store.save(&settings).is_err() {
         tracing::warn!("could not save the window position");
     }
@@ -541,12 +641,33 @@ mod tests {
     fn close_restores_pill_rect() {
         let pill = rect(1000, 972, 440, 44);
         let panel = panel_rect(pill, 440, 344, WORK);
-        assert_eq!(pill_after_close(pill, panel, panel), pill);
+        assert_eq!(pill_after_close(440, 44, panel, true), pill);
         // Dragged 50 px left and 100 px up while open: the pill follows.
         let moved = rect(panel.x - 50, panel.y - 100, 440, 344);
         assert_eq!(
-            pill_after_close(pill, panel, moved),
+            pill_after_close(440, 44, moved, true),
             rect(950, 872, 440, 44)
         );
+        // Resized from its top edge while grown up: the pill stays on the bottom edge.
+        let taller = rect(panel.x, panel.y - 200, 600, 544);
+        assert_eq!(pill_after_close(440, 44, taller, true), pill);
+        // Grown down: the pill sits on the panel's top edge, whatever its height.
+        let down = rect(1000, 10, 600, 500);
+        assert_eq!(
+            pill_after_close(440, 44, down, false),
+            rect(1000, 10, 440, 44)
+        );
+    }
+
+    #[test]
+    fn panel_larger_than_work_area_is_shrunk() {
+        let small = MonitorRect {
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 300,
+        };
+        let pill = rect(100, 250, 440, 44);
+        assert_eq!(panel_rect(pill, 1200, 900, small), rect(0, 0, 800, 300));
     }
 }

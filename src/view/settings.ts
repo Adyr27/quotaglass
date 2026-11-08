@@ -89,7 +89,7 @@ export function createSettings(deps: SettingsDeps): SettingsView {
     h("div", { class: "view-head" }, [heading, back]),
     h("div", { class: "set-group" }, [
       row("set-theme", "Theme", theme.el),
-      row("set-glass", "Glass", glass.el, "Mica needs Windows 11."),
+      row("set-glass", "Glass", glass.el, "Shows as solid while Windows transparency effects are off."),
       row("set-top", "Always on top", onTop.el),
       row("set-start", "Start with Windows", autostart.el),
       row("set-refresh", "Refresh every", minutes.el),

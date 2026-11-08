@@ -19,6 +19,19 @@ pub struct WindowRect {
     pub height: u32,
 }
 
+/// The pill's narrowest and widest width, in CSS px.
+pub const PILL_WIDTH: (u32, u32) = (320, 960);
+
+/// The smallest panel the layout holds, in CSS px.
+pub const PANEL_MIN: (u32, u32) = (440, 344);
+
+/// The panel's size in CSS px, as the person last left it. Multiplied by the UI zoom for the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelSize {
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Theme {
@@ -61,6 +74,9 @@ pub struct AddedAccount {
 pub struct Settings {
     pub version: u32,
     pub pill_position: Option<WindowRect>,
+    pub panel_size: Option<PanelSize>,
+    /// The pill's width in CSS px; its height is fixed.
+    pub pill_width: Option<u32>,
     pub always_on_top: bool,
     pub autostart: bool,
     pub refresh_minutes: u8,
@@ -80,6 +96,8 @@ impl Default for Settings {
         Self {
             version: SETTINGS_VERSION,
             pill_position: None,
+            panel_size: None,
+            pill_width: None,
             always_on_top: true,
             autostart: false,
             refresh_minutes: 2,
@@ -198,6 +216,13 @@ impl Settings {
     pub(crate) fn clamp(&mut self) {
         self.version = SETTINGS_VERSION;
         self.refresh_minutes = self.refresh_minutes.clamp(1, 5);
+        if let Some(w) = &mut self.pill_width {
+            *w = (*w).clamp(PILL_WIDTH.0, PILL_WIDTH.1);
+        }
+        if let Some(size) = &mut self.panel_size {
+            size.width = size.width.clamp(PANEL_MIN.0, 4000);
+            size.height = size.height.clamp(PANEL_MIN.1, 4000);
+        }
 
         let mut seen = Vec::with_capacity(MAX_PINNED);
         self.pinned_accounts.retain(|id| {
@@ -333,6 +358,39 @@ mod tests {
     fn write_file(dir: &std::path::Path, bytes: &[u8]) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("settings.json"), bytes).unwrap();
+    }
+
+    #[test]
+    fn panel_size_round_trips_and_clamps() {
+        let s: Settings =
+            serde_json::from_str(r#"{"version":2,"panelSize":{"width":600,"height":450}}"#)
+                .unwrap();
+        assert_eq!(
+            s.panel_size,
+            Some(PanelSize {
+                width: 600,
+                height: 450
+            })
+        );
+        let old: Settings = serde_json::from_str(r#"{"version":2}"#).unwrap();
+        assert_eq!(old.panel_size, None);
+        let mut tiny = Settings {
+            panel_size: Some(PanelSize {
+                width: 10,
+                height: 10,
+            }),
+            pill_width: Some(10),
+            ..Settings::default()
+        };
+        tiny.clamp();
+        assert_eq!(
+            tiny.panel_size,
+            Some(PanelSize {
+                width: 440,
+                height: 344
+            })
+        );
+        assert_eq!(tiny.pill_width, Some(PILL_WIDTH.0));
     }
 
     #[test]
@@ -512,6 +570,8 @@ mod tests {
                 width: 360,
                 height: 520,
             }),
+            panel_size: None,
+            pill_width: None,
             always_on_top: false,
             autostart: true,
             refresh_minutes: 4,

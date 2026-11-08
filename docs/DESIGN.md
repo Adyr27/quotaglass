@@ -47,7 +47,6 @@ QuotaGlass uses a two-crate Rust workspace and a lightweight web view frontend.
    - Discovers local configuration files, CLI tools, and the running Antigravity app.
    - Queries vendor endpoints for Claude and Codex.
    - Queries the local language server on loopback (`127.0.0.1`) for Antigravity.
-   - Queries Orca when enabled for Antigravity.
    - Parses vendor metrics into normalized bucket records.
    - Computes pace strips, fast burn, room left, and the best account now.
    - Evaluates limit warnings at 50, 80, and 90 percent.
@@ -74,19 +73,18 @@ QuotaGlass uses a two-crate Rust workspace and a lightweight web view frontend.
 
 ## Data sources and priority
 
-QuotaGlass gathers metrics using three source tiers:
+QuotaGlass gathers metrics using two source tiers:
 
 | Priority | Source | Mechanism | Accounts covered |
 |---|---|---|---|
 | 1 (Highest) | Direct | Reads local CLI credentials, then queries vendor endpoints | Active Claude Code or Codex login (`~/.claude`, `~/.codex`), or added profile folders (`%APPDATA%\QuotaGlass\profiles\<id>`) |
 | 2 | Antigravity app | Queries the running Antigravity IDE language server on loopback (`127.0.0.1`) | Active Antigravity accounts while the IDE is running |
-| 3 (Lowest) | Orca | Executes `orca account list --json` | Antigravity accounts in Orca (optional) |
 
 ### Priority and selection rules
 
 - Nothing is read until the user connects a source on the initial screen or in Settings.
 - Claude and Codex use Direct sources only (current CLI login or added profile folders).
-- Antigravity reads from the running Antigravity app's local server. If Orca is connected, it adds the Antigravity accounts it knows; accounts are merged into one card per account ID. Orca is never used for Claude or Codex.
+- Antigravity reads from the running Antigravity app's local server.
 - OMP support has been removed.
 - The per-account source picker has been removed. Each account uses its detected and assigned source.
 - A live response from the current refresh cycle takes precedence over cached historical readings.
@@ -167,7 +165,7 @@ Schema fields:
 - `refresh_minutes`: integer refresh interval (1, 2, or 5 minutes).
 - `theme`: `system`, `light`, or `dark`.
 - `material`: `acrylic`, `mica`, or `clear`.
-- `connected`: list of active connections (`claudeCurrent`, `codexCurrent`, `antigravityApp`, `orca`).
+- `connected`: list of active connections (`claudeCurrent`, `codexCurrent`, `antigravityApp`).
 - `added_accounts`: list of profile records `{ id, service, profile_dir }`.
 - `pinned_accounts`: list of up to 4 pinned account IDs.
 - `hidden_accounts`: list of hidden account IDs.
@@ -222,5 +220,4 @@ The as-built release includes the following deliberate deviations from earlier d
 2. **Keyring and session key omitted**: Operating system keyring storage and manual web session keys are omitted.
 3. **Glass styling retained**: Translucent glass styling is retained for the desktop widget form factor.
 4. **Synthetic test fixtures**: All test fixtures use synthetic tokens and identities without personal data.
-5. **Orca scoped to Antigravity**: Orca is restricted to Antigravity metrics; Claude and Codex rely on direct CLI sources.
-6. **Notification persistence**: The 90 percent warning uses a standard Windows toast with sound because the notification plugin cannot keep a toast on screen indefinitely.
+5. **Notification persistence**: The 90 percent warning uses a standard Windows toast with sound because the notification plugin cannot keep a toast on screen indefinitely.

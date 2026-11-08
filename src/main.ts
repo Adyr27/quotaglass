@@ -42,6 +42,8 @@ let open = false;
 let up = true;
 let toggling = false;
 let settingsOpen = false;
+/** True when Settings opened the panel (from the tray), so Back closes it again. */
+let settingsOpenedPanel = false;
 let selectedId: string | null = null;
 let refreshing = false;
 
@@ -73,7 +75,7 @@ const settingsView = createSettings({
   onSource: (c, on) => void take(connectSource(c, on)),
   onUnhide: (id) => void take(setHidden(id, false)),
   onLabel: (id, label) => void take(setLabel(id, label)),
-  onClose: () => closeSettings(),
+  onBack: () => settingsBack(),
 });
 
 const problem = h("p", { class: "problem", role: "status", hidden: true });
@@ -136,6 +138,7 @@ async function setOpen(next: boolean): Promise<void> {
 }
 
 function openSettings(): void {
+  if (!settingsOpen) settingsOpenedPanel = !open;
   settingsOpen = true;
   void (open ? Promise.resolve() : setOpen(true)).then(() => {
     settingsOpen = true;
@@ -145,10 +148,15 @@ function openSettings(): void {
   });
 }
 
-function closeSettings(): void {
+/** Back to the previous view: the panel Settings was opened from, or the pill when Settings opened the panel. */
+function settingsBack(): void {
+  if (settingsOpenedPanel) {
+    void setOpen(false).then(() => pill.chevron.focus({ preventScroll: true }));
+    return;
+  }
   settingsOpen = false;
   render();
-  list.settingsButton.focus({ preventScroll: true });
+  (isFirstRun() ? first.heading : list.settingsButton).focus({ preventScroll: true });
 }
 
 async function loadDetected(): Promise<void> {
@@ -205,7 +213,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape" || event.defaultPrevented || !open) return;
   event.preventDefault();
   if (settingsOpen) {
-    closeSettings();
+    settingsBack();
     return;
   }
   void setOpen(false).then(() => pill.chevron.focus({ preventScroll: true }));

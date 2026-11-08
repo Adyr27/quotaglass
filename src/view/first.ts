@@ -6,14 +6,13 @@ import { CONNECTION_NAME, CONNECTION_ORDER } from "../format";
 import { h, setAttr, setText } from "./dom";
 
 const MISSING: Record<Connection, string> = {
-  claudeCurrent: "No Claude login found on this PC.",
-  codexCurrent: "No Codex login found on this PC.",
+  claudeCurrent: "Not signed in on this PC.",
+  codexCurrent: "Not signed in on this PC.",
   antigravityApp: "",
-  orca: "Orca is not installed.",
 };
 
 function found(d: Detected, c: Connection): boolean {
-  return { claudeCurrent: d.claude, codexCurrent: d.codex, antigravityApp: d.antigravityApp, orca: d.orca }[c];
+  return { claudeCurrent: d.claude, codexCurrent: d.codex, antigravityApp: d.antigravityApp }[c];
 }
 
 export interface First {
@@ -25,7 +24,7 @@ export interface First {
 export function createFirst(onConnect: (c: Connection) => void): First {
   const heading = h("h2", { class: "view-title", id: "first-title", tabindex: -1 }, ["Connect your accounts"]);
   const rows = CONNECTION_ORDER.map((c) => {
-    const button = h("button", { class: c === "orca" ? "btn btn-quiet" : "btn btn-primary", type: "button" }, [CONNECTION_NAME[c]]);
+    const button = h("button", { class: "btn btn-primary", type: "button" }, [CONNECTION_NAME[c]]);
     const why = h("span", { class: "first-why" });
     button.addEventListener("click", () => {
       if (button.getAttribute("aria-disabled") !== "true") onConnect(c);
@@ -34,7 +33,7 @@ export function createFirst(onConnect: (c: Connection) => void): First {
   });
   const el = h("section", { class: "first", "aria-labelledby": "first-title" }, [
     heading,
-    h("p", { class: "view-text" }, ["QuotaGlass reads nothing until you pick a source. You can change this later in Settings."]),
+    h("p", { class: "view-text" }, ["Nothing is read until you pick one."]),
     ...rows.map((r) => r.el),
   ]);
 

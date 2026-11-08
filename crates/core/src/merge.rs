@@ -11,7 +11,7 @@ const ANTIGRAVITY_HINT: &str = "Open Antigravity to see its limits";
 const LOGIN_EXPIRED: &str = "Login expired";
 const PROFILE_MISSING: &str = "Profile folder missing";
 
-/// What a scheduler task reads: the current login of a CLI or app, an added account's profile, or neither (Orca).
+/// What a scheduler task reads: the current login of a CLI or app, an added account's profile, or neither.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskRole {
     CurrentLogin,
@@ -44,7 +44,7 @@ impl MergeCtx<'_> {
 }
 
 /// Last successful reading per account, then per (source kind, task). Memory only; tasks refill it after a restart.
-/// The inner order is the source priority: `SourceKind` (Direct, AntigravityApp, Orca), then task ID.
+/// The inner order is the source priority: `SourceKind` (Direct, AntigravityApp), then task ID.
 #[derive(Debug, Default)]
 pub struct LastReadings(HashMap<String, BTreeMap<(SourceKind, String), Reading>>);
 
@@ -111,8 +111,8 @@ pub fn build(
     let mut cards: Vec<AccountView> = Vec::new();
     let mut covered: HashSet<&str> = HashSet::new();
     for (id, per_task) in &last.0 {
-        // A task that answered this cycle wins over stored readings. Among them, one with numbers beats one without
-        // (Orca can list an account it has no limits for). Otherwise the map order breaks the tie: `min_by_key`
+        // A task that answered this cycle wins over stored readings. Among them, one with numbers beats one without.
+        // Otherwise the map order breaks the tie: `min_by_key`
         // keeps the first of equal keys.
         let chosen = per_task
             .iter()
@@ -337,7 +337,6 @@ mod tests {
             ("claude-current", TaskRole::CurrentLogin),
             ("codex-current", TaskRole::CurrentLogin),
             ("antigravity-app", TaskRole::CurrentLogin),
-            ("orca", TaskRole::Other),
             ("p1", TaskRole::AddedAccount),
             ("p2", TaskRole::AddedAccount),
         ]
@@ -459,144 +458,29 @@ mod tests {
     const E: Option<&str> = Some("user@example.com");
 
     #[test]
-    fn app_beats_orca_when_both_succeed() {
-        let mut last = LastReadings::default();
-        let cards = run(
-            &[
-                ok(
-                    "orca",
-                    SourceKind::Orca,
-                    vec![reading(
-                        Service::Antigravity,
-                        E,
-                        "acc-1",
-                        SourceKind::Orca,
-                        &[50.0],
-                    )],
-                ),
-                ok(
-                    "antigravity-app",
-                    SourceKind::AntigravityApp,
-                    vec![reading(
-                        Service::Antigravity,
-                        E,
-                        "antigravity-app",
-                        SourceKind::AntigravityApp,
-                        &[10.0],
-                    )],
-                ),
-            ],
-            &mut last,
-        );
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::AntigravityApp));
-        assert_eq!(cards[0].headline.as_ref().unwrap().used_percent, 10.0);
-    }
-
-    #[test]
-    fn orca_and_app_same_email_one_card() {
-        let mut last = LastReadings::default();
-        let cards = run(
-            &[
-                ok(
-                    "antigravity-app",
-                    SourceKind::AntigravityApp,
-                    vec![reading(
-                        Service::Antigravity,
-                        Some("User@Example.com"),
-                        "antigravity-app",
-                        SourceKind::AntigravityApp,
-                        &[10.0],
-                    )],
-                ),
-                ok(
-                    "orca",
-                    SourceKind::Orca,
-                    vec![reading(
-                        Service::Antigravity,
-                        E,
-                        "acc-1",
-                        SourceKind::Orca,
-                        &[50.0],
-                    )],
-                ),
-            ],
-            &mut last,
-        );
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].id, id_of(Service::Antigravity, "user@example.com"));
-        assert!(cards[0].current_login, "the app login reads it");
-        assert_eq!(cards[0].profile_id, None);
-    }
-
-    #[test]
-    fn orca_used_when_app_fails_this_cycle() {
-        let mut last = LastReadings::default();
-        run(
-            &[ok(
-                "antigravity-app",
-                SourceKind::AntigravityApp,
-                vec![reading(
-                    Service::Antigravity,
-                    E,
-                    "antigravity-app",
-                    SourceKind::AntigravityApp,
-                    &[10.0],
-                )],
-            )],
-            &mut last,
-        );
-        let cards = run(
-            &[
-                err(
-                    "antigravity-app",
-                    SourceKind::AntigravityApp,
-                    Service::Antigravity,
-                    FetchError::Timeout,
-                ),
-                ok(
-                    "orca",
-                    SourceKind::Orca,
-                    vec![reading(
-                        Service::Antigravity,
-                        E,
-                        "acc-1",
-                        SourceKind::Orca,
-                        &[50.0],
-                    )],
-                ),
-            ],
-            &mut last,
-        );
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::Orca));
-        assert_eq!(cards[0].state, CardState::Ok);
-    }
-
-    #[test]
     fn email_less_readings_never_merged() {
         let mut last = LastReadings::default();
         let cards = run(
             &[
                 ok(
-                    "antigravity-app",
-                    SourceKind::AntigravityApp,
+                    "claude-current",
+                    SourceKind::Direct,
                     vec![reading(
-                        Service::Antigravity,
+                        Service::Claude,
                         None,
-                        "antigravity-app",
-                        SourceKind::AntigravityApp,
+                        "claude-current",
+                        SourceKind::Direct,
                         &[10.0],
                     )],
                 ),
                 ok(
-                    "orca",
-                    SourceKind::Orca,
+                    "p1",
+                    SourceKind::Direct,
                     vec![reading(
-                        Service::Antigravity,
+                        Service::Claude,
                         E,
-                        "acc-1",
-                        SourceKind::Orca,
+                        "p1",
+                        SourceKind::Direct,
                         &[50.0],
                     )],
                 ),
@@ -605,7 +489,6 @@ mod tests {
         );
         assert_eq!(cards.len(), 2);
     }
-
     #[test]
     fn one_task_success_keeps_other_task_readings() {
         let mut last = LastReadings::default();
@@ -635,13 +518,13 @@ mod tests {
         let mut last = LastReadings::default();
         let cards = run(
             &[ok(
-                "orca",
-                SourceKind::Orca,
+                "antigravity-app",
+                SourceKind::AntigravityApp,
                 vec![reading(
                     Service::Antigravity,
                     E,
-                    "acc-1",
-                    SourceKind::Orca,
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
                     &[10.0, 100.0, 15.0],
                 )],
             )],
@@ -678,9 +561,43 @@ mod tests {
     }
 
     #[test]
-    fn reading_with_numbers_beats_higher_priority_empty_one() {
+    fn reading_with_numbers_beats_empty_one() {
         let mut last = LastReadings::default();
         let cards = run(
+            &[
+                ok(
+                    "claude-current",
+                    SourceKind::Direct,
+                    vec![reading(
+                        Service::Claude,
+                        E,
+                        "claude-current",
+                        SourceKind::Direct,
+                        &[],
+                    )],
+                ),
+                ok(
+                    "p1",
+                    SourceKind::Direct,
+                    vec![reading(
+                        Service::Claude,
+                        E,
+                        "p1",
+                        SourceKind::Direct,
+                        &[40.0],
+                    )],
+                ),
+            ],
+            &mut last,
+        );
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].headline.as_ref().unwrap().used_percent, 40.0);
+        assert_eq!(cards[0].state, CardState::Ok);
+    }
+    #[test]
+    fn forget_drops_only_that_task() {
+        let mut last = LastReadings::default();
+        run(
             &[
                 ok(
                     "antigravity-app",
@@ -690,41 +607,6 @@ mod tests {
                         E,
                         "antigravity-app",
                         SourceKind::AntigravityApp,
-                        &[],
-                    )],
-                ),
-                ok(
-                    "orca",
-                    SourceKind::Orca,
-                    vec![reading(
-                        Service::Antigravity,
-                        E,
-                        "acc-1",
-                        SourceKind::Orca,
-                        &[40.0],
-                    )],
-                ),
-            ],
-            &mut last,
-        );
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::Orca));
-        assert_eq!(cards[0].state, CardState::Ok);
-    }
-
-    #[test]
-    fn forget_drops_only_that_task() {
-        let mut last = LastReadings::default();
-        run(
-            &[
-                ok(
-                    "orca",
-                    SourceKind::Orca,
-                    vec![reading(
-                        Service::Antigravity,
-                        E,
-                        "acc-1",
-                        SourceKind::Orca,
                         &[5.0],
                     )],
                 ),
@@ -732,8 +614,8 @@ mod tests {
             ],
             &mut last,
         );
-        assert!(last.forget("orca"));
-        assert!(!last.forget("orca"), "nothing left to drop");
+        assert!(last.forget("antigravity-app"));
+        assert!(!last.forget("antigravity-app"), "nothing left to drop");
         let cards = run(&[], &mut last);
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].service, Service::Claude);
@@ -744,13 +626,13 @@ mod tests {
         let mut last = LastReadings::default();
         run(
             &[ok(
-                "orca",
-                SourceKind::Orca,
+                "antigravity-app",
+                SourceKind::AntigravityApp,
                 vec![reading(
                     Service::Antigravity,
                     E,
-                    "acc-1",
-                    SourceKind::Orca,
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
                     &[20.0],
                 )],
             )],
@@ -758,8 +640,8 @@ mod tests {
         );
         let cards = run(
             &[err(
-                "orca",
-                SourceKind::Orca,
+                "antigravity-app",
+                SourceKind::AntigravityApp,
                 Service::Antigravity,
                 FetchError::Timeout,
             )],
@@ -778,19 +660,22 @@ mod tests {
         let mut last = LastReadings::default();
         run(
             &[ok(
-                "orca",
-                SourceKind::Orca,
+                "antigravity-app",
+                SourceKind::AntigravityApp,
                 vec![reading(
                     Service::Antigravity,
                     E,
-                    "acc-1",
-                    SourceKind::Orca,
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
                     &[20.0],
                 )],
             )],
             &mut last,
         );
-        let cards = run(&[ok("orca", SourceKind::Orca, vec![])], &mut last);
+        let cards = run(
+            &[ok("antigravity-app", SourceKind::AntigravityApp, vec![])],
+            &mut last,
+        );
         assert!(cards.is_empty());
     }
 
@@ -799,13 +684,13 @@ mod tests {
         let mut last = LastReadings::default();
         let cards = run(
             &[ok(
-                "orca",
-                SourceKind::Orca,
+                "antigravity-app",
+                SourceKind::AntigravityApp,
                 vec![reading(
                     Service::Antigravity,
                     E,
-                    "acc-1",
-                    SourceKind::Orca,
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
                     &[],
                 )],
             )],

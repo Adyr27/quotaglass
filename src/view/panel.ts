@@ -3,7 +3,7 @@
 
 import type { AccountView, Service, Settings } from "../types";
 import { SERVICE_NAME, SERVICE_ORDER, visibleAccounts, worstUsed } from "../format";
-import { h, iconSliders, setAttr, show, syncChildren } from "./dom";
+import { h, iconSliders, providerMark, setAttr, show, syncChildren } from "./dom";
 
 export interface ListDeps {
   onSelect(id: string): void;
@@ -28,7 +28,7 @@ export function createList(deps: ListDeps): List {
   const addClaude = h("button", { class: "btn", type: "button" }, ["Claude"]);
   const addCodex = h("button", { class: "btn", type: "button" }, ["Codex"]);
   const choice = h("div", { class: "add-choice", hidden: true }, [
-    h("p", {}, ["Sign in to another account of"]),
+    h("p", {}, ["Sign in to"]),
     h("div", { class: "add-row" }, [addClaude, addCodex]),
   ]);
   const foot = h("div", { class: "providers-foot" }, [addButton, settingsButton]);
@@ -82,7 +82,7 @@ export function createList(deps: ListDeps): List {
         const hint = service === "antigravity" && mine.length === 0 && settings?.connected.includes("antigravityApp") === true;
         if (mine.length === 0 && !hint) continue;
         const head = h("div", { class: "group-head", id: `group-${service}` }, [
-          h("span", { class: "dot", "data-service": service, "aria-hidden": "true" }),
+          providerMark(service),
           h("span", {}, [SERVICE_NAME[service]]),
           mine.length > 1 ? h("span", { class: "count num" }, [String(mine.length)]) : null,
         ]);
@@ -102,7 +102,7 @@ export function createList(deps: ListDeps): List {
           h("div", { class: "group", role: "group", "aria-labelledby": `group-${service}` }, [
             head,
             ...rows,
-            hint ? h("p", { class: "group-hint" }, ["Open Antigravity to see its limits"]) : null,
+            hint ? h("p", { class: "group-hint" }, ["Open the app"]) : null,
           ]),
         );
       }

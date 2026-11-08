@@ -292,7 +292,6 @@ pub fn logout(service: Service, tool: Option<&Path>, profile: &Path) -> Result<(
 #[serde(rename_all = "camelCase")]
 pub enum UrlTarget {
     OpenAiUsage,
-    Orca,
 }
 
 impl UrlTarget {
@@ -300,8 +299,6 @@ impl UrlTarget {
         match self {
             // verify before release: the page the Codex app links to for usage and banked resets.
             UrlTarget::OpenAiUsage => "https://chatgpt.com/codex/settings/usage",
-            // verify before release: the repo names no Orca homepage, so this is the project's GitHub page.
-            UrlTarget::Orca => "https://github.com/stablyai/orca",
         }
     }
 }
@@ -554,15 +551,14 @@ mod tests {
 
     #[test]
     fn url_targets_are_https_allowlisted() {
-        for t in [UrlTarget::OpenAiUsage, UrlTarget::Orca] {
-            let url = t.url();
-            assert!(url.starts_with("https://"), "{url}");
-            assert!(
-                !url.chars()
-                    .any(|c| c.is_whitespace() || "&|<>^%\"()!`'".contains(c)),
-                "{url} would be read by cmd.exe"
-            );
-        }
+        // One target today; a new one must be added here too.
+        let url = UrlTarget::OpenAiUsage.url();
+        assert!(url.starts_with("https://"), "{url}");
+        assert!(
+            !url.chars()
+                .any(|c| c.is_whitespace() || "&|<>^%\"()!`'".contains(c)),
+            "{url} would be read by cmd.exe"
+        );
         assert_eq!(
             UrlTarget::OpenAiUsage.url(),
             "https://chatgpt.com/codex/settings/usage"

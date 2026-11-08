@@ -10,13 +10,12 @@ export const SERVICE_NAME: Record<Service, string> = {
   antigravity: "Antigravity",
 };
 
-export const CONNECTION_ORDER: readonly Connection[] = ["claudeCurrent", "codexCurrent", "antigravityApp", "orca"];
+export const CONNECTION_ORDER: readonly Connection[] = ["claudeCurrent", "codexCurrent", "antigravityApp"];
 
 export const CONNECTION_NAME: Record<Connection, string> = {
-  claudeCurrent: "Use my current Claude login",
-  codexCurrent: "Use my current Codex login",
-  antigravityApp: "Use my Antigravity app",
-  orca: "Connect Orca (optional)",
+  claudeCurrent: "Claude login",
+  codexCurrent: "Codex login",
+  antigravityApp: "Antigravity app",
 };
 
 const MIN_MS = 60_000;
@@ -42,13 +41,13 @@ export function resetText(resetsAtMs: number | null, nowMs: number): string {
   return minutes === 60 ? `resets ${hours + 1} h` : `resets ${hours} h ${minutes} min`;
 }
 
-/** "updated just now", "updated 4 min ago", "updated 2 h ago", "updated 3 d ago". Empty when unknown. */
+/** "just now", "4 min ago", "2 h ago", "3 d ago". Empty when unknown. */
 export function updatedText(ageSecs: number | null): string {
   if (ageSecs === null || !Number.isFinite(ageSecs) || ageSecs < 0) return "";
-  if (ageSecs < 60) return "updated just now";
-  if (ageSecs < 3600) return `updated ${Math.floor(ageSecs / 60)} min ago`;
-  if (ageSecs < 86_400) return `updated ${Math.floor(ageSecs / 3600)} h ago`;
-  return `updated ${Math.floor(ageSecs / 86_400)} d ago`;
+  if (ageSecs < 60) return "just now";
+  if (ageSecs < 3600) return `${Math.floor(ageSecs / 60)} min ago`;
+  if (ageSecs < 86_400) return `${Math.floor(ageSecs / 3600)} h ago`;
+  return `${Math.floor(ageSecs / 86_400)} d ago`;
 }
 
 /** Whole percent used, 0 to 100. Floored, so a limit never reads as reached before it is. */

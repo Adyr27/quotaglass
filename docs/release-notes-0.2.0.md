@@ -7,13 +7,13 @@ QuotaGlass 0.2.0 redesigns the desktop widget into a compact pill and expandable
 - Always on top is now on by default.
 - v0.1.0 per-account settings were reset, so accounts must be reconnected (window position, refresh interval and autostart are kept).
 - OMP support was removed.
-- Orca is optional.
+- The optional third-party Antigravity source was removed. Antigravity is read from its own app only.
 
 ## What is new
 
 ### Pill and panel
 
-QuotaGlass now runs as a compact pill docked above the taskbar. Clicking the chevron expands the pill into a two-pane panel. Pressing `Esc` or clicking the chevron closes the panel back to the pill.
+QuotaGlass now runs as a compact pill docked above the taskbar. Clicking the chevron expands the pill into a two-pane panel. Pressing `Esc` or clicking the chevron closes the panel back to the pill. The pill shows each account as its provider's icon and the percent used; the name is in the tooltip.
 
 ### Resizable window
 
@@ -28,7 +28,7 @@ Each limit displays as a pace strip with tick marks at 10% intervals.
 
 ### Best now
 
-The account with the most room left across its limits receives a "Best now" chip. When accounts tie on room left, the account whose worst limit resets sooner wins. The mark appears when at least two accounts are readable.
+The account with the most room left across its limits receives a "Best now" chip. When accounts tie on room left, the account whose worst limit resets sooner wins. The mark appears in the open panel when at least two accounts are readable.
 
 ### Limit warnings
 

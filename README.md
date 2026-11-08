@@ -1,10 +1,10 @@
 # QuotaGlass
 
-QuotaGlass is a Windows desktop widget that shows plan-limit usage for Claude, Codex and Antigravity. It sits on the desktop as a pill that opens into a panel.
+QuotaGlass is a Windows desktop widget that shows plan-limit usage for Claude, Codex and Antigravity. It sits on the desktop as a pill that opens into a panel. The pill shows each account as its provider's icon and the percent used.
 
 Each limit appears as a pace strip. The solid fill shows the percentage of the limit used. A marker shows the share of the time window that has passed. When usage runs ahead of time (`used >= 1.5 x passed` and `used >= 20`), the strip shows "fast burn" in red.
 
-"Best now" marks the account with the most room left across its limits. If accounts tie on room left, the one whose worst limit resets sooner wins. This mark appears when at least two accounts are readable.
+"Best now" marks the account with the most room left across its limits. If accounts tie on room left, the one whose worst limit resets sooner wins. This mark appears in the open panel when at least two accounts are readable.
 
 ## Accounts
 
@@ -18,8 +18,6 @@ Nothing is read until the person connects a source on the first screen.
 ## Antigravity
 
 Antigravity quota is read from the running Antigravity app's local server on this PC (`127.0.0.1`), only while the app is open. No Google sign-in is used.
-
-Orca is optional and only for Antigravity.
 
 ## Warnings
 

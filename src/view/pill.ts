@@ -1,10 +1,10 @@
-// The pill: up to four pinned accounts, or the single worst one, each as dot, name, % used and a
-// compact strip. "Best now" marks the account with the most room; when that account is not shown it
-// joins as a fifth, compact item. The chevron opens and closes the panel.
+// The pill: up to four pinned accounts, or the single worst one, each as provider icon, % used and a
+// compact strip. No names: the icon says the provider, and the full name is in the tooltip and for
+// screen readers. "Best now" shows only in the open panel. The chevron opens and closes the panel.
 
 import type { AccountView, Settings } from "../types";
-import { usedWhole, visibleAccounts, worstBucket, worstUsed } from "../format";
-import { h, iconChevron, setAttr, syncChildren } from "./dom";
+import { SERVICE_NAME, usedWhole, visibleAccounts, worstBucket, worstUsed } from "../format";
+import { h, iconChevron, providerMark, setAttr, syncChildren } from "./dom";
 import { createStrip } from "./strip";
 
 export interface Pill {
@@ -30,19 +30,18 @@ function dimmed(a: AccountView): boolean {
   return a.state === "loginExpired" || a.state === "profileMissing" || a.freshness === "stale";
 }
 
-function item(a: AccountView, compact: boolean): HTMLElement {
+function item(a: AccountView): HTMLElement {
   // The pill answers "how close is this account to a limit", so it shows the worst limit.
   const worst = worstBucket(a);
   const used = worst === null ? null : usedWhole(worst.usedPercent);
+  const name = a.label === SERVICE_NAME[a.service] ? a.label : `${SERVICE_NAME[a.service]} · ${a.label}`;
   const top = h("span", { class: "pill-top" }, [
-    h("span", { class: "dot", "data-service": a.service, "aria-hidden": "true" }),
-    h("span", { class: "pill-name" }, [a.label]),
-    a.bestNow ? h("span", { class: "best" }, ["Best now"]) : null,
-    compact ? null : h("span", { class: "pill-pct num" }, [used === null ? "—" : `${used}%`]),
+    providerMark(a.service),
+    h("span", { class: "pill-pct num" }, [used === null ? "—" : `${used}%`]),
   ]);
-  return h("span", { class: compact ? "pill-item pill-item-compact" : "pill-item", "data-dim": dimmed(a) }, [
+  return h("span", { class: "pill-item", "data-dim": dimmed(a), role: "img", "aria-label": `${name} ${used === null ? "no reading" : `${used}% used`}`, title: name }, [
     top,
-    worst !== null && !compact ? createStrip(worst, a.service, true) : null,
+    worst !== null ? createStrip(worst, a.service, true) : null,
   ]);
 }
 
@@ -66,10 +65,7 @@ export function createPill(onToggle: () => void): Pill {
     el,
     chevron,
     update(accounts, settings, open) {
-      const shown = pillAccounts(accounts, settings?.pinnedAccounts ?? []);
-      const best = accounts.find((a) => a.bestNow && !a.hidden);
-      const wanted = shown.map((a) => item(a, false));
-      if (best !== undefined && !shown.includes(best)) wanted.push(item(best, true));
+      const wanted = pillAccounts(accounts, settings?.pinnedAccounts ?? []).map(item);
       syncChildren(items, wanted);
       empty.textContent = accounts.length === 0 ? "Connect an account" : "No readings yet";
       empty.hidden = wanted.length > 0;

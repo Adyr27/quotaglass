@@ -41,15 +41,15 @@ function stateText(a: AccountView): string | null {
     case "loginExpired":
       return "Login expired.";
     case "profileMissing":
-      return "Profile missing. Its folder was deleted outside QuotaGlass.";
+      return "Profile folder missing.";
     case "noReadingYet":
-      return a.profileId !== null ? "No reading yet. Finish signing in in the console window." : "No reading yet.";
+      return a.profileId !== null ? "Finish signing in in the console." : "No reading yet.";
     case "error":
       return a.reason ?? "Could not read this account.";
     case "noSource":
       return a.reason ?? "Open Antigravity to see its limits.";
     default:
-      return a.freshness === "stale" ? "These numbers are old; the last refresh failed." : null;
+      return a.freshness === "stale" ? "Last refresh failed." : null;
   }
 }
 
@@ -84,11 +84,11 @@ export function createDetail(deps: DetailDeps): Detail {
   const confirmYes = h("button", { class: "btn btn-danger", type: "button" }, ["Remove"]);
   const confirmNo = h("button", { class: "btn", type: "button" }, ["Cancel"]);
   const confirm = h("div", { class: "confirm", role: "group", "aria-labelledby": "confirm-text", hidden: true }, [
-    h("p", { id: "confirm-text" }, ["Signs this account out on this PC and deletes its QuotaGlass profile."]),
+    h("p", { id: "confirm-text" }, ["Signs out and deletes this profile."]),
     h("div", { class: "confirm-actions" }, [confirmYes, confirmNo]),
   ]);
 
-  const empty = h("p", { class: "detail-empty" }, ["Pick an account on the left."]);
+  const empty = h("p", { class: "detail-empty" }, ["Pick an account."]);
   const body = h("div", { class: "detail-body" }, [h("header", { class: "detail-head" }, [
     h("div", { class: "detail-title" }, [h("div", { class: "detail-title-row" }, [name, best]), meta]),
     pin,

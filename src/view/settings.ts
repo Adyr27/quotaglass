@@ -2,14 +2,15 @@
 
 import type { AccountView, Connection, Detected, Material, Settings, SettingsPatch, Theme } from "../types";
 import { CONNECTION_NAME, CONNECTION_ORDER, SERVICE_NAME } from "../format";
-import { createSwitch, h, setAttr, setText, show, syncChildren, type Switch } from "./dom";
+import { createSwitch, h, iconBack, providerMark, setAttr, setText, show, syncChildren, type Switch } from "./dom";
 
 export interface SettingsDeps {
   onPatch(patch: SettingsPatch): void;
   onSource(c: Connection, on: boolean): void;
   onUnhide(id: string): void;
   onLabel(id: string, label: string | null): void;
-  onClose(): void;
+  /** Back: returns to the view Settings was opened from. */
+  onBack(): void;
 }
 
 export interface SettingsView {
@@ -60,13 +61,13 @@ function row(id: string, title: string, control: HTMLElement, note?: string): HT
 
 function found(d: Detected | null, c: Connection): boolean {
   if (d === null) return true;
-  return { claudeCurrent: d.claude, codexCurrent: d.codex, antigravityApp: d.antigravityApp, orca: d.orca }[c];
+  return { claudeCurrent: d.claude, codexCurrent: d.codex, antigravityApp: d.antigravityApp }[c];
 }
 
 export function createSettings(deps: SettingsDeps): SettingsView {
   const heading = h("h2", { class: "view-title", id: "settings-title", tabindex: -1 }, ["Settings"]);
-  const back = h("button", { class: "btn", type: "button" }, ["Done"]);
-  back.addEventListener("click", () => deps.onClose());
+  const back = h("button", { class: "icon-btn", type: "button", "aria-label": "Back", title: "Back" }, [iconBack()]);
+  back.addEventListener("click", () => deps.onBack());
 
   const theme = seg<Theme>("set-theme", [["system", "System"], ["light", "Light"], ["dark", "Dark"]], (v) => deps.onPatch({ theme: v }));
   const glass = seg<Material>("set-glass", [["acrylic", "Acrylic"], ["mica", "Mica"], ["clear", "Clear"]], (v) => deps.onPatch({ material: v }));
@@ -86,10 +87,10 @@ export function createSettings(deps: SettingsDeps): SettingsView {
   let labels: Record<string, string> = {};
 
   const el = h("section", { class: "settings", "aria-labelledby": "settings-title" }, [
-    h("div", { class: "view-head" }, [heading, back]),
+    h("div", { class: "view-head" }, [back, heading]),
     h("div", { class: "set-group" }, [
       row("set-theme", "Theme", theme.el),
-      row("set-glass", "Glass", glass.el, "Shows as solid while Windows transparency effects are off."),
+      row("set-glass", "Glass", glass.el, "Solid when Windows transparency is off."),
       row("set-top", "Always on top", onTop.el),
       row("set-start", "Start with Windows", autostart.el),
       row("set-refresh", "Refresh every", minutes.el),
@@ -134,7 +135,7 @@ export function createSettings(deps: SettingsDeps): SettingsView {
         }
         if (document.activeElement !== input) input.value = settings.labels[a.id] ?? "";
         input.placeholder = a.label;
-        return h("label", { class: "name-row" }, [h("span", { class: "dot", "data-service": a.service, "aria-hidden": "true" }), input]);
+        return h("label", { class: "name-row" }, [providerMark(a.service), input]);
       });
       syncChildren(namesList, names.length > 0 ? names : [h("p", { class: "set-note" }, ["No accounts yet."])]);
 
@@ -149,7 +150,7 @@ export function createSettings(deps: SettingsDeps): SettingsView {
         if (hidden.some((a) => a.id === id)) continue;
         const unhide = h("button", { class: "btn", type: "button" }, ["Unhide"]);
         unhide.addEventListener("click", () => deps.onUnhide(id));
-        rows.push(h("div", { class: "hidden-row" }, [h("span", {}, ["Account not connected now"]), unhide]));
+        rows.push(h("div", { class: "hidden-row" }, [h("span", {}, ["Not connected"]), unhide]));
       }
       const none = h("p", { class: "set-note" });
       setText(none, "No hidden accounts.");

@@ -1,7 +1,7 @@
 /* QuotaGlass, Pace Band. Smoked glass ground, ink text, colour only on fills and marks.
    Every word is in ink: colour never carries text.
    The OS glass (Acrylic, Mica) brings its own dark or light tint, so the CSS tint on top stays light:
-   a smoke on Acrylic, none on Clear and Mica. Without OS glass (html.no-acrylic) the CSS tint is
+   a smoke on Acrylic, a lighter one on Clear and Mica. Without OS glass (html.no-acrylic) the CSS tint is
    near-solid, which keeps text at AA over any wallpaper. */
 
 :root {
@@ -28,9 +28,11 @@
   --radius-control: 6px;
 }
 
+/* Clear and Mica: a faint smoke and a soft halo keep text readable over a busy wallpaper. */
 :root[data-material="clear"],
 :root[data-material="mica"] {
-  --tint: transparent;
+  --tint: rgba(16, 16, 19, 0.14);
+  --halo: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
 :root[data-theme="light"] {
@@ -52,18 +54,21 @@
 
 :root[data-theme="light"][data-material="clear"],
 :root[data-theme="light"][data-material="mica"] {
-  --tint: transparent;
+  --tint: rgba(246, 246, 244, 0.18);
+  --halo: 0 0 2px rgba(255, 255, 255, 0.7);
 }
 
 /* No OS glass: a near-solid ground the UI draws itself. */
 html.no-acrylic,
 html.no-acrylic[data-material] {
   --tint: rgba(16, 16, 19, 0.94);
+  --halo: none;
 }
 
 html.no-acrylic[data-theme="light"],
 html.no-acrylic[data-theme="light"][data-material] {
   --tint: rgba(246, 246, 244, 0.96);
+  --halo: none;
 }
 
 * {
@@ -93,6 +98,7 @@ html[data-material="clear"] body {
 body {
   background: transparent;
   color: var(--ink);
+  text-shadow: var(--halo, none);
   font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   font-size: 13px;
   line-height: 18px;
@@ -200,14 +206,15 @@ button {
   background: var(--neg);
 }
 
-/* Shared marks */
+/* Shared marks: each provider's icon (src/assets/providers) filled with its colour. */
 
-.dot {
+.mark {
   flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  width: 14px;
+  height: 14px;
   background: var(--dot, var(--ink-2));
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
 }
 
 [data-service="claude"] {
@@ -220,6 +227,29 @@ button {
 
 [data-service="antigravity"] {
   --dot: var(--antigravity);
+}
+
+.mark[data-service="claude"] {
+  -webkit-mask-image: url("./assets/providers/claude.svg");
+  mask-image: url("./assets/providers/claude.svg");
+}
+
+.mark[data-service="codex"] {
+  -webkit-mask-image: url("./assets/providers/codex.svg");
+  mask-image: url("./assets/providers/codex.svg");
+}
+
+.mark[data-service="antigravity"] {
+  -webkit-mask-image: url("./assets/providers/antigravity.svg");
+  mask-image: url("./assets/providers/antigravity.svg");
+}
+
+/* Ink on a solid chip needs no halo. */
+.best,
+.btn-primary,
+.btn-danger,
+.seg-item[aria-checked="true"] {
+  text-shadow: none;
 }
 
 /* The one mark reserved for Best now: an inverted ink chip. */
@@ -235,7 +265,7 @@ button {
 }
 
 [data-dim="true"] .strip,
-[data-dim="true"] .dot,
+[data-dim="true"] .mark,
 .detail[data-dim="true"] .limits {
   filter: saturate(0);
   opacity: 0.7;
@@ -332,11 +362,6 @@ button {
   gap: 5px;
 }
 
-.pill-item-compact {
-  flex: 0 1 auto;
-  justify-content: center;
-}
-
 .pill-top {
   display: flex;
   align-items: center;
@@ -344,21 +369,14 @@ button {
   min-width: 0;
 }
 
-.pill-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-2);
-}
-
-.pill-item-compact .pill-name {
-  flex: 0 1 auto;
-  max-width: 72px;
+.pill .mark {
+  width: 16px;
+  height: 16px;
 }
 
 .pill-pct {
+  font-size: 15px;
+  line-height: 18px;
   font-weight: 600;
 }
 
@@ -605,8 +623,8 @@ button {
 
 .detail-name {
   margin: 0;
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 18px;
+  line-height: 24px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -649,6 +667,7 @@ button {
 }
 
 .limit-name {
+  font-weight: 600;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -722,15 +741,19 @@ button {
 .view-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 4px;
+  margin: 0 0 8px -8px;
 }
 
 .view-title {
   margin: 0 0 4px;
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 18px;
+  line-height: 24px;
   font-weight: 600;
+}
+
+.view-head .view-title {
+  margin: 0;
 }
 
 .view-text {

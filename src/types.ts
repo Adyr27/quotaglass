@@ -2,7 +2,7 @@
 
 export type Service = "claude" | "codex" | "antigravity";
 
-export type SourceKind = "direct" | "antigravityApp" | "orca";
+export type SourceKind = "direct" | "antigravityApp";
 
 export type Freshness = "live" | "aged" | "stale";
 
@@ -61,7 +61,7 @@ export type Theme = "system" | "light" | "dark";
 export type Material = "acrylic" | "mica" | "clear";
 
 /** A one-click source the person switched on. */
-export type Connection = "claudeCurrent" | "codexCurrent" | "antigravityApp" | "orca";
+export type Connection = "claudeCurrent" | "codexCurrent" | "antigravityApp";
 
 /** An account signed in through "+ Add account". Its login stays in `profileDir`. */
 export interface AddedAccount {
@@ -111,11 +111,10 @@ export interface Detected {
   claude: boolean;
   codex: boolean;
   antigravityApp: boolean;
-  orca: boolean;
 }
 
 /** A page the app may open in the browser. The UI names it; the app holds the URL. */
-export type UrlTarget = "openAiUsage" | "orca";
+export type UrlTarget = "openAiUsage";
 
 export interface BackdropPayload {
   acrylic: boolean;

@@ -70,7 +70,7 @@ impl Env {
         })
     }
 
-    /// First match of any of `names` (e.g. ["orca.exe"]) in PATH order.
+    /// First match of any of `names` (e.g. ["claude.exe"]) in PATH order.
     pub fn find_on_path(&self, names: &[&str]) -> Option<PathBuf> {
         find_in(&self.path_dirs, names)
     }

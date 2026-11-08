@@ -22,10 +22,25 @@ pub fn key(account_id: &str, bucket: &str) -> String {
     format!("{account_id}|{bucket}")
 }
 
+/// Reset times closer than this are one window. Claude reports the same reset a few milliseconds apart on each
+/// fetch; a real new window moves the reset by hours.
+pub const SAME_WINDOW_MS: i64 = 5 * 60_000;
+
+fn same_window(a: Option<i64>, b: Option<i64>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.abs_diff(b) < SAME_WINDOW_MS.unsigned_abs(),
+        _ => a == b,
+    }
+}
+
 /// The level to fire now, if any. A new `reset_ms` starts a new window and clears the stored level.
 /// A jump past several levels fires only the highest one.
 pub fn due(state: &mut WarnState, key: &str, used: f64, reset_ms: Option<i64>) -> Option<u8> {
-    if state.0.get(key).is_some_and(|f| f.reset_ms != reset_ms) {
+    if state
+        .0
+        .get(key)
+        .is_some_and(|f| !same_window(f.reset_ms, reset_ms))
+    {
         state.0.remove(key);
     }
     let stored = state.0.get(key).map_or(0, |f| f.level);
@@ -126,12 +141,28 @@ mod tests {
     fn new_reset_clears_levels() {
         let mut s = WarnState::default();
         let k = key("a", "5h");
-        assert_eq!(due(&mut s, &k, 85.0, Some(1_000)), Some(80));
+        const H: i64 = 3_600_000;
+        assert_eq!(due(&mut s, &k, 85.0, Some(H)), Some(80));
         // The old window ended with a lower reading still stored: the entry goes.
-        assert_eq!(due(&mut s, &k, 10.0, Some(2_000)), None);
+        assert_eq!(due(&mut s, &k, 10.0, Some(6 * H)), None);
         assert!(s.0.is_empty());
-        assert_eq!(due(&mut s, &k, 55.0, Some(2_000)), Some(50));
-        assert_eq!(due(&mut s, &k, 55.0, Some(3_000)), Some(50));
+        assert_eq!(due(&mut s, &k, 55.0, Some(6 * H)), Some(50));
+        assert_eq!(due(&mut s, &k, 55.0, Some(11 * H)), Some(50));
+    }
+
+    #[test]
+    fn reset_jitter_is_one_window() {
+        let mut s = WarnState::default();
+        let k = key("claude:x", "Weekly");
+        // Values seen live on 2026-11-08: the same reset, a few ms apart on each fetch.
+        assert_eq!(due(&mut s, &k, 55.0, Some(1_794_625_199_863)), Some(50));
+        assert_eq!(due(&mut s, &k, 55.0, Some(1_794_625_199_854)), None);
+        assert_eq!(due(&mut s, &k, 56.0, Some(1_794_625_199_856)), None);
+        // A real new window, hours later, still starts over.
+        assert_eq!(
+            due(&mut s, &k, 55.0, Some(1_794_625_199_856 + 18_000_000)),
+            Some(50)
+        );
     }
 
     #[test]

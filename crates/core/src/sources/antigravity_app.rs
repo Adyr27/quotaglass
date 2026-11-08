@@ -1,11 +1,18 @@
 //! The running Antigravity app: quota from its language server on a loopback port.
 //!
 //! Method based on the open-source `ai-usagebar` 1.41.0 (`antigravity/fetch.rs`): find the app's language-server
-//! processes with one hidden PowerShell CIM query, find their loopback listening ports with `netstat`, read the CSRF
-//! token from the server's own page (`GET /`), then `POST` `GetUserStatus` and `RetrieveUserQuotaSummary`. Field
+//! processes and their loopback listening ports with in-process Windows calls (no child process, no PowerShell, no
+//! `netstat`), read the CSRF token from the server's own page (`GET /`), then `POST` `GetUserStatus` and
+//! `RetrieveUserQuotaSummary`. Field
 //! names verified against the live Antigravity desktop app on 2026-11-08 (Windows 11). This source only contacts
 //! `127.0.0.1`. It never reads a Google login, a token store or Windows Credential Manager, and it never calls a
 //! Google endpoint. Response bodies and the CSRF token are never logged.
+//!
+//! This is how the person's existing Antigravity login is reused: the signed-in app's own server answers with that
+//! login's quota, so there is no second sign-in. Reading the app's stored Google session instead was ruled out: the
+//! product never uses the Antigravity Google session (`PRODUCT.md`), an access token would need a refresh (never done
+//! here), and it would add a Google host to the network allowlist. Constraint: limits can be read only while the app
+//! runs. While it is closed, the panel says so and the card returns on the next refresh after the app opens.
 
 use crate::env::Env;
 use crate::model::{
@@ -16,10 +23,7 @@ use crate::provider::{BoxFut, Provider};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::future::Future;
-use std::io::Read;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -29,20 +33,12 @@ const IMAGES: [&str; 2] = ["language_server.exe", "language_server_windows_x64.e
 /// Folder that must appear in the executable path (compared without case), so a Windsurf or Codeium language
 /// server is never read as Antigravity.
 const APP_FOLDER: &str = r"\antigravity\";
-/// PIDs and executable paths of language-server processes, as CSV.
-const PROCESS_QUERY: &str =
-    "Get-CimInstance Win32_Process -Filter \"Name LIKE 'language_server%'\" \
-     | Select-Object ProcessId,ExecutablePath | ConvertTo-Csv -NoTypeInformation";
 const STATUS_PATH: &str = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
 const QUOTA_PATH: &str = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
-const TOOL_TIMEOUT: Duration = Duration::from_secs(5);
 /// Upper bound on one whole `fetch`: process discovery plus every port.
 const FETCH_BUDGET: Duration = Duration::from_secs(15);
-const MAX_STDOUT: usize = 4 * 1024 * 1024;
 /// Upper bound on JSON nodes visited by the best-effort user-status search.
 const SEARCH_BUDGET: usize = 10_000;
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct AntigravityApp;
 
@@ -55,7 +51,7 @@ impl Provider for AntigravityApp {
         Some(Service::Antigravity)
     }
 
-    /// Always true: finding the process spawns PowerShell (up to 5 s), so it runs in `fetch`, off the caller's thread.
+    /// Always true: finding the process needs a process list, so it runs in `fetch`, off the caller's thread.
     fn detect(&self, _env: &Env) -> bool {
         true
     }
@@ -63,12 +59,11 @@ impl Provider for AntigravityApp {
     fn fetch<'a>(&'a self, env: &'a Env) -> BoxFut<'a, Result<Vec<Reading>, FetchError>> {
         Box::pin(within(FETCH_BUDGET, async move {
             let ports = tokio::task::spawn_blocking(|| -> Result<Vec<u16>, FetchError> {
-                let pids = app_pids()?;
+                let pids = app_server_pids(native::processes(&IMAGES)?);
                 if pids.is_empty() {
                     return Err(FetchError::NotDetected);
                 }
-                let netstat = run_hidden(system_tool("netstat.exe"), &["-ano", "-p", "tcp"])?;
-                Ok(parse_netstat(&netstat, &pids))
+                Ok(loopback_ports(&native::listeners()?, &pids))
             })
             .await
             .map_err(|_| FetchError::Unavailable("process list could not be read"))??;
@@ -85,63 +80,6 @@ async fn within<T>(
     tokio::time::timeout(budget, fut)
         .await
         .unwrap_or(Err(FetchError::Timeout))
-}
-
-fn app_pids() -> Result<Vec<u32>, FetchError> {
-    let csv = run_hidden(
-        system_tool(r"WindowsPowerShell\v1.0\powershell.exe"),
-        &["-NoProfile", "-NonInteractive", "-Command", PROCESS_QUERY],
-    )?;
-    Ok(parse_process_csv(&csv))
-}
-
-/// `%SystemRoot%\System32\<name>`, so a program of the same name on PATH is never run instead.
-fn system_tool(name: &str) -> PathBuf {
-    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
-    PathBuf::from(root).join("System32").join(name)
-}
-
-/// Runs a program without a console window and returns its stdout. Over 5 s it is killed; over 4 MiB of output
-/// is an error.
-fn run_hidden(program: PathBuf, args: &[&str]) -> Result<String, FetchError> {
-    let mut cmd = Command::new(program);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let mut child = cmd
-        .spawn()
-        .map_err(|_| FetchError::Unavailable("process list could not be read"))?;
-    let stdout = child.stdout.take().ok_or(FetchError::Format("stdout"))?;
-    // A separate reader keeps the pipe drained, so a large output cannot block the child.
-    let reader = std::thread::spawn(move || {
-        let mut out = Vec::new();
-        let _ = stdout.take(MAX_STDOUT as u64 + 1).read_to_end(&mut out);
-        out
-    });
-    let deadline = Instant::now() + TOOL_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let out = reader.join().map_err(|_| FetchError::Format("stdout"))?;
-                if !status.success() || out.len() > MAX_STDOUT {
-                    return Err(FetchError::Unavailable("process list could not be read"));
-                }
-                return Ok(String::from_utf8_lossy(&out).into_owned());
-            }
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(FetchError::Timeout);
-            }
-        }
-    }
 }
 
 /// Tries each port in order; the first that returns buckets wins. A port that answers with a quota body this parser
@@ -200,23 +138,12 @@ async fn read_port(http: &HttpClient, port: u16) -> Result<PortReading, FetchErr
     Ok((email, plan, parse_quota_summary(&body)?))
 }
 
-/// PIDs from the `PROCESS_QUERY` CSV (`"ProcessId","ExecutablePath"`) whose file name is one of `IMAGES` and whose
-/// path contains `APP_FOLDER`, in order, without repeats. The header and rows without a path are skipped.
-pub fn parse_process_csv(csv: &str) -> Vec<u32> {
+/// PIDs of `(pid, executable path)` rows whose file name is one of `IMAGES` and whose path contains `APP_FOLDER`, in
+/// order, without repeats.
+pub fn app_server_pids(rows: impl IntoIterator<Item = (u32, String)>) -> Vec<u32> {
     let mut pids = Vec::new();
-    for line in csv.lines() {
-        let Some((pid, path)) = line
-            .trim()
-            .strip_prefix('"')
-            .and_then(|l| l.split_once("\",\""))
-        else {
-            continue;
-        };
-        let Ok(pid) = pid.parse::<u32>() else {
-            continue;
-        };
-        let path = path.strip_suffix('"').unwrap_or(path);
-        if is_app_server(path) && !pids.contains(&pid) {
+    for (pid, path) in rows {
+        if is_app_server(&path) && !pids.contains(&pid) {
             pids.push(pid);
         }
     }
@@ -229,30 +156,206 @@ fn is_app_server(path: &str) -> bool {
         && path.to_ascii_lowercase().contains(APP_FOLDER)
 }
 
-/// Loopback (`127.0.0.1`) listening ports of `pids` from `netstat -ano -p tcp`, highest first, without repeats.
-/// The state column is localised on some Windows languages, so a remote address of `0.0.0.0:0` also counts as
-/// listening.
-pub fn parse_netstat(text: &str, pids: &[u32]) -> Vec<u16> {
-    let mut ports: Vec<u16> = text
-        .lines()
-        .filter_map(|line| {
-            let cols: Vec<&str> = line.split_whitespace().collect();
-            let [proto, local, remote, state, pid] = cols[..] else {
-                return None;
-            };
-            if !proto.eq_ignore_ascii_case("TCP") || !pids.contains(&pid.parse().ok()?) {
-                return None;
-            }
-            if !state.eq_ignore_ascii_case("LISTENING") && remote != "0.0.0.0:0" {
-                return None;
-            }
-            let port: u16 = local.strip_prefix("127.0.0.1:")?.parse().ok()?;
-            (port != 0).then_some(port)
-        })
+/// One listening IPv4 TCP socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Listener {
+    pub addr: [u8; 4],
+    pub port: u16,
+    pub pid: u32,
+}
+
+/// Loopback (`127.0.0.1`) listening ports of `pids`, highest first, without repeats.
+pub fn loopback_ports(listeners: &[Listener], pids: &[u32]) -> Vec<u16> {
+    let mut ports: Vec<u16> = listeners
+        .iter()
+        .filter(|l| l.addr == [127, 0, 0, 1] && l.port != 0 && pids.contains(&l.pid))
+        .map(|l| l.port)
         .collect();
     ports.sort_unstable_by(|a, b| b.cmp(a));
     ports.dedup();
     ports
+}
+
+/// The process list and the TCP listener table, read in this process through `kernel32` and `iphlpapi`. Only
+/// processes whose file name matches are opened, and only to read their image path.
+#[cfg(windows)]
+mod native {
+    use super::Listener;
+    use crate::model::FetchError;
+    use std::ffi::c_void;
+
+    type Handle = *mut c_void;
+    const TH32CS_SNAPPROCESS: u32 = 0x2;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const AF_INET: u32 = 2;
+    const TCP_TABLE_OWNER_PID_LISTENER: i32 = 3;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    const MAX_PATH: usize = 260;
+    /// `MIB_TCPROW_OWNER_PID`: state, local address, local port, remote address, remote port, owning PID.
+    const ROW_WORDS: usize = 6;
+
+    #[repr(C)]
+    struct ProcessEntry {
+        size: u32,
+        usage: u32,
+        pid: u32,
+        heap_id: usize,
+        module_id: u32,
+        threads: u32,
+        parent_pid: u32,
+        priority: i32,
+        flags: u32,
+        exe_file: [u16; MAX_PATH],
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> Handle;
+        fn Process32FirstW(snapshot: Handle, entry: *mut ProcessEntry) -> i32;
+        fn Process32NextW(snapshot: Handle, entry: *mut ProcessEntry) -> i32;
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
+        fn QueryFullProcessImageNameW(
+            process: Handle,
+            flags: u32,
+            name: *mut u16,
+            size: *mut u32,
+        ) -> i32;
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+
+    #[link(name = "iphlpapi")]
+    extern "system" {
+        fn GetExtendedTcpTable(
+            table: *mut c_void,
+            size: *mut u32,
+            order: i32,
+            af: u32,
+            class: i32,
+            reserved: u32,
+        ) -> u32;
+    }
+
+    /// Closes the handle when dropped, on every return path.
+    struct Owned(Handle);
+
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            // SAFETY: the handle came from a successful open call in this module and is closed once.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    const UNAVAILABLE: FetchError = FetchError::Unavailable("process list could not be read");
+
+    /// `(pid, executable path)` for each running process whose file name is one of `names` (without case).
+    pub fn processes(names: &[&str]) -> Result<Vec<(u32, String)>, FetchError> {
+        // SAFETY: plain call; the result is checked against INVALID_HANDLE_VALUE (-1) and null.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot.is_null() || snapshot as isize == -1 {
+            return Err(UNAVAILABLE);
+        }
+        let snapshot = Owned(snapshot);
+        // SAFETY: an all-zero ProcessEntry is valid; `size` is set as the API requires.
+        let mut entry: ProcessEntry = unsafe { std::mem::zeroed() };
+        entry.size = std::mem::size_of::<ProcessEntry>() as u32;
+        let mut out = Vec::new();
+        // SAFETY: `entry` is a valid, sized ProcessEntry for the whole loop.
+        let mut more = unsafe { Process32FirstW(snapshot.0, &mut entry) } != 0;
+        while more {
+            let len = entry
+                .exe_file
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(MAX_PATH);
+            let name = String::from_utf16_lossy(&entry.exe_file[..len]);
+            if names.iter().any(|n| name.eq_ignore_ascii_case(n)) {
+                if let Some(path) = image_path(entry.pid) {
+                    out.push((entry.pid, path));
+                }
+            }
+            // SAFETY: as above.
+            more = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
+        }
+        Ok(out)
+    }
+
+    /// The full image path of `pid`, or `None` when the process is gone or cannot be opened.
+    fn image_path(pid: u32) -> Option<String> {
+        // SAFETY: plain call with a limited, read-only access right; null is checked.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if process.is_null() {
+            return None;
+        }
+        let process = Owned(process);
+        let mut buf = [0u16; 32_768];
+        let mut size = buf.len() as u32;
+        // SAFETY: `buf` holds `size` u16s; the API writes at most that many and updates `size`.
+        let ok =
+            unsafe { QueryFullProcessImageNameW(process.0, 0, buf.as_mut_ptr(), &mut size) } != 0;
+        ok.then(|| String::from_utf16_lossy(&buf[..size as usize]))
+    }
+
+    /// Every listening IPv4 TCP socket with its owning PID.
+    pub fn listeners() -> Result<Vec<Listener>, FetchError> {
+        let mut size = 0u32;
+        // The table can grow between the size query and the read, so a few attempts are allowed.
+        for _ in 0..4 {
+            // u32 words keep the table aligned as the API expects.
+            let mut buf = vec![0u32; (size as usize).div_ceil(4).max(1)];
+            size = (buf.len() * 4) as u32;
+            // SAFETY: `buf` holds `size` bytes; the API writes at most that many, or reports the size it needs.
+            let rc = unsafe {
+                GetExtendedTcpTable(
+                    buf.as_mut_ptr().cast(),
+                    &mut size,
+                    0,
+                    AF_INET,
+                    TCP_TABLE_OWNER_PID_LISTENER,
+                    0,
+                )
+            };
+            match rc {
+                0 => return Ok(rows(&buf)),
+                ERROR_INSUFFICIENT_BUFFER => continue,
+                _ => return Err(UNAVAILABLE),
+            }
+        }
+        Err(UNAVAILABLE)
+    }
+
+    /// `dwNumEntries`, then rows of six words. Address and port are in network byte order in memory.
+    fn rows(buf: &[u32]) -> Vec<Listener> {
+        let count = buf.first().map_or(0, |&n| n as usize);
+        buf[1..]
+            .as_chunks::<ROW_WORDS>()
+            .0
+            .iter()
+            .take(count)
+            .map(|r| {
+                let port = r[2].to_ne_bytes();
+                Listener {
+                    addr: r[1].to_ne_bytes(),
+                    port: u16::from_be_bytes([port[0], port[1]]),
+                    pid: r[5],
+                }
+            })
+            .collect()
+    }
+}
+
+/// Windows only: elsewhere there is no Antigravity app to find.
+#[cfg(not(windows))]
+mod native {
+    use super::Listener;
+    use crate::model::FetchError;
+
+    pub fn processes(_names: &[&str]) -> Result<Vec<(u32, String)>, FetchError> {
+        Err(FetchError::NotDetected)
+    }
+
+    pub fn listeners() -> Result<Vec<Listener>, FetchError> {
+        Ok(Vec::new())
+    }
 }
 
 /// The value after `csrfToken":"`: 1 to 128 characters of `[A-Za-z0-9_-]`, else `None`.
@@ -390,6 +493,7 @@ fn iso_to_ms(iso: &str) -> Result<i64, FetchError> {
 mod tests {
     use super::*;
     use crate::testutil::MockServer;
+    use std::time::Instant;
 
     macro_rules! fixture {
         ($name:literal) => {
@@ -401,46 +505,77 @@ mod tests {
         };
     }
 
-    const PROCESSES: &str = fixture!("ag_processes.csv");
-    const NETSTAT: &str = fixture!("ag_netstat.txt");
-    const NETSTAT_2: &str = fixture!("ag_netstat_2.txt");
     const QUOTA: &str = fixture!("ag_quota_summary.json");
     const QUOTA_SNAKE: &str = fixture!("ag_quota_summary_snake.json");
     const NOW: i64 = 1_794_150_000_000;
 
-    #[test]
-    fn process_csv_filters_by_name_and_path() {
-        let csv = r#""ProcessId","ExecutablePath"
-"12000","C:\Users\u\AppData\Local\Programs\antigravity\resources\bin\language_server.exe"
-"23000","C:\Users\u\AppData\Local\Programs\Windsurf\resources\bin\language_server_windows_x64.exe"
-"956","C:\Users\u\AppData\Local\Programs\antigravity\Antigravity.exe"
-"#;
-        assert_eq!(parse_process_csv(csv), vec![12000]);
-        // Case-insensitive name and folder; empty, renamed and look-alike paths are rejected; no repeats.
-        assert_eq!(parse_process_csv(PROCESSES), vec![12000, 7852]);
-        assert!(parse_process_csv("").is_empty());
-        assert!(parse_process_csv(r#""ProcessId","ExecutablePath""#).is_empty());
+    fn row(pid: u32, path: &str) -> (u32, String) {
+        (pid, path.to_string())
     }
 
     #[test]
-    fn netstat_ranks_loopback_ports() {
-        let pids = parse_process_csv(PROCESSES);
-        assert_eq!(parse_netstat(NETSTAT, &pids), vec![62294, 54366]);
-        assert_eq!(parse_netstat(NETSTAT, &[19328]), vec![6463]);
-        assert!(parse_netstat(NETSTAT, &[]).is_empty());
+    fn app_server_pids_filter_by_name_and_path() {
+        let rows = vec![
+            row(
+                12000,
+                r"C:\Users\u\AppData\Local\Programs\antigravity\resources\bin\language_server.exe",
+            ),
+            row(
+                23000,
+                r"C:\Users\u\AppData\Local\Programs\Windsurf\resources\bin\language_server_windows_x64.exe",
+            ),
+            row(
+                956,
+                r"C:\Users\u\AppData\Local\Programs\antigravity\Antigravity.exe",
+            ),
+            row(
+                7852,
+                r"C:\USERS\U\.GEMINI\ANTIGRAVITY\BIN\LANGUAGE_SERVER_WINDOWS_X64.EXE",
+            ),
+            row(
+                12000,
+                r"C:\Users\u\AppData\Local\Programs\antigravity\resources\bin\language_server.exe",
+            ),
+            row(31, r"C:\antigravity-fake\language_server.exe.bak"),
+            row(32, ""),
+        ];
+        assert_eq!(app_server_pids(rows), vec![12000, 7852]);
+        assert!(app_server_pids(Vec::new()).is_empty());
+    }
+
+    fn listener(addr: [u8; 4], port: u16, pid: u32) -> Listener {
+        Listener { addr, port, pid }
     }
 
     #[test]
-    fn netstat_accepts_localised_state() {
-        let row = "  TCP    127.0.0.1:50000        0.0.0.0:0              ABHÖREN         42";
-        assert_eq!(parse_netstat(row, &[42]), vec![50000]);
+    fn loopback_ports_ranked_and_filtered() {
+        let table = [
+            listener([127, 0, 0, 1], 54366, 12000),
+            listener([127, 0, 0, 1], 62294, 7852),
+            listener([0, 0, 0, 0], 60000, 12000),
+            listener([127, 0, 0, 1], 6463, 19328),
+            listener([127, 0, 0, 1], 0, 12000),
+            listener([127, 0, 0, 1], 62294, 7852),
+        ];
+        assert_eq!(loopback_ports(&table, &[12000, 7852]), vec![62294, 54366]);
+        assert_eq!(loopback_ports(&table, &[19328]), vec![6463]);
+        assert!(loopback_ports(&table, &[]).is_empty());
     }
 
+    /// The real Windows tables: proves the FFI layouts read without error and yield sane rows.
+    #[cfg(windows)]
     #[test]
-    fn ports_change_between_calls_is_rediscovered() {
-        let pids = parse_process_csv(PROCESSES);
-        assert_eq!(parse_netstat(NETSTAT, &pids)[0], 62294);
-        assert_eq!(parse_netstat(NETSTAT_2, &pids), vec![63001, 62294]);
+    fn native_tables_read() {
+        let procs = native::processes(&["svchost.exe"]).expect("process list");
+        assert!(procs
+            .iter()
+            .all(|(pid, path)| *pid != 0 && path.to_ascii_lowercase().ends_with("svchost.exe")));
+        let listeners = native::listeners().expect("tcp table");
+        assert!(
+            !listeners.is_empty(),
+            "Windows always has listening sockets"
+        );
+        assert!(listeners.iter().all(|l| l.port != 0));
     }
 
     #[test]

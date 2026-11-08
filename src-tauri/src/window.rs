@@ -288,7 +288,53 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         _ => {}
     });
 
+    #[cfg(windows)]
+    keep_glass::install(&window);
     window.show()
+}
+
+/// Windows 11 draws its Mica and Acrylic backdrops only while the window is active. When a click lands outside the
+/// pill, DWM paints a solid fallback instead. Every `WM_NCACTIVATE` is passed on as "active", so the backdrop stays
+/// on. The window has no title bar, so the inactive look changes nothing else; focus and activation are untouched.
+#[cfg(windows)]
+mod keep_glass {
+    use std::ffi::c_void;
+
+    type Hwnd = *mut c_void;
+    type SubclassProc = unsafe extern "system" fn(Hwnd, u32, usize, isize, usize, usize) -> isize;
+
+    const WM_NCACTIVATE: u32 = 0x0086;
+    const SUBCLASS_ID: usize = 0x5147;
+
+    #[link(name = "comctl32")]
+    extern "system" {
+        fn SetWindowSubclass(hwnd: Hwnd, proc: SubclassProc, id: usize, data: usize) -> i32;
+        fn DefSubclassProc(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
+    }
+
+    unsafe extern "system" fn proc(
+        hwnd: Hwnd,
+        msg: u32,
+        wparam: usize,
+        lparam: isize,
+        _id: usize,
+        _data: usize,
+    ) -> isize {
+        let wparam = if msg == WM_NCACTIVATE { 1 } else { wparam };
+        // SAFETY: forwards the message to the next handler in the chain, as the subclass contract requires.
+        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
+
+    /// Runs on the main thread, which owns the window, as `SetWindowSubclass` requires.
+    pub fn install(window: &tauri::WebviewWindow) {
+        let Ok(hwnd) = window.hwnd() else {
+            return;
+        };
+        // SAFETY: `hwnd` is this process's live main window, and `proc` is a static function that holds no state.
+        if unsafe { SetWindowSubclass(hwnd.0, proc, SUBCLASS_ID, 0) } == 0 {
+            tracing::warn!("could not keep the glass on while the window is inactive");
+        }
+    }
 }
 
 /// Clears every backdrop, then applies the chosen one. False when the OS refused it.

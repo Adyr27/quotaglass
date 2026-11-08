@@ -12,7 +12,7 @@ The UI is HTML, CSS and TypeScript in a Tauri 2 WebView2 window on Windows 10 an
 
 Everyone who installs QuotaGlass. The repo `Adyr27/quotaglass` is private today, but the product is designed for public users. The owner's own setup counts, but no more than anyone else's (owner decision, 2026-11-08). These are developers who have one or more Claude, Codex or Antigravity plan accounts signed in on their PC, use AI coding tools all day, and lose work when a plan limit cuts them off mid-task.
 
-Their setups differ: some have one account, some several; some use Orca, most do not. A screen that only makes sense on the owner's setup is a failure.
+Their setups differ: some have one account, some several. A screen that only makes sense on the owner's setup is a failure.
 
 ## Product Purpose
 
@@ -27,7 +27,7 @@ QuotaGlass shows only numbers it reads from real sources: the user's own CLI log
 ## Operating Context
 
 - A small window that sits on the desktop next to the IDE and terminal. It is looked at for about a second, many times a day.
-- Data sources: the Claude Code login (`~/.claude`), the Codex login (`~/.codex`), and the running Antigravity app for Antigravity. Orca is an optional extra source; most users have only the native tools. QuotaGlass opens other apps' files read-only.
+- Data sources: the Claude Code login (`~/.claude`), the Codex login (`~/.codex`), and the running Antigravity app for Antigravity. QuotaGlass opens other apps' files read-only.
 - The limits are the 5-hour, weekly and per-model windows, each with its reset time.
 - Planned in v0.2.0 (brainstorm, not built yet): a pill docked above the taskbar that can be dragged anywhere and stays on top; a two-pane panel (providers on the left, account detail on the right); native Windows warnings at 50, 80 and 90% of each limit; a "Best Now" badge; a fast-burn badge.
 
@@ -36,8 +36,7 @@ QuotaGlass shows only numbers it reads from real sources: the user's own CLI log
 - Providers: Claude, Codex and Antigravity only. Cursor is out of scope.
 - No manual entry, no telemetry, no analytics, no auto-update, no crash upload.
 - Never refresh or create OAuth tokens. Never print tokens or email addresses.
-- Antigravity is read from the running Antigravity app (Orca optional). QuotaGlass never touches Google sign-in and never uses the Antigravity Google session.
-- Orca is never required.
+- Antigravity is read from the running Antigravity app. QuotaGlass never touches Google sign-in and never uses the Antigravity Google session.
 - Vendor endpoints are undocumented and can change. Every card must handle a source that fails, with the reason shown.
 - Open: whether Codex exposes a count of banked resets.
 

@@ -492,7 +492,7 @@ mod tests {
             card("claude:a", Service::Claude, None, true),
             card("codex:b", Service::Codex, Some("p1"), false),
             card("codex:c", Service::Codex, Some("p2"), true),
-            card("orca:d", Service::Antigravity, None, false),
+            card("antigravity:d", Service::Antigravity, None, false),
         ];
         let added = [added("p1"), added("p2"), added("p3")];
         assert_eq!(
@@ -507,7 +507,7 @@ mod tests {
             resolve_account("codex:c", &cards, &added),
             Ok(AccountTask::Profile(added[1].clone()))
         );
-        assert!(resolve_account("orca:d", &cards, &added).is_err());
+        assert!(resolve_account("antigravity:d", &cards, &added).is_err());
         assert_eq!(
             resolve_account("p3", &cards, &added),
             Ok(AccountTask::Profile(added[2].clone())),

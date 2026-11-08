@@ -26,7 +26,6 @@ impl Service {
 pub enum SourceKind {
     Direct,
     AntigravityApp,
-    Orca,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -34,7 +33,7 @@ pub struct AccountKey {
     pub service: Service,
     /// Lowercased and trimmed. `None` means the account is never merged with another reading.
     pub email: Option<String>,
-    /// Distinguishes email-less accounts, e.g. "claude-current" or an Orca account id.
+    /// Distinguishes email-less accounts, e.g. "claude-current".
     pub local_id: String,
 }
 
@@ -147,15 +146,11 @@ mod tests {
 
     #[test]
     fn source_kind_serialises_camel_case() {
-        let names: Vec<String> = [
-            SourceKind::Direct,
-            SourceKind::AntigravityApp,
-            SourceKind::Orca,
-        ]
-        .iter()
-        .map(|k| serde_json::to_string(k).unwrap())
-        .collect();
-        assert_eq!(names, ["\"direct\"", "\"antigravityApp\"", "\"orca\""]);
+        let names: Vec<String> = [SourceKind::Direct, SourceKind::AntigravityApp]
+            .iter()
+            .map(|k| serde_json::to_string(k).unwrap())
+            .collect();
+        assert_eq!(names, ["\"direct\"", "\"antigravityApp\""]);
     }
 
     #[test]

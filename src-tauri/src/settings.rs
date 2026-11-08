@@ -57,7 +57,6 @@ pub enum Connection {
     ClaudeCurrent,
     CodexCurrent,
     AntigravityApp,
-    Orca,
 }
 
 /// An account signed in through "+ Add account". Its login lives in `profile_dir`, never in this file.
@@ -282,6 +281,18 @@ fn migrate_v1(raw: &serde_json::Value) -> Settings {
     }
 }
 
+/// Drops `connected` entries this build does not know, such as a source a later build removed. Without this,
+/// one retired name would make the whole file fail to parse and every setting would reset.
+fn drop_unknown_sources(mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(list) = value
+        .get_mut("connected")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        list.retain(|c| serde_json::from_value::<Connection>(c.clone()).is_ok());
+    }
+    value
+}
+
 pub struct SettingsStore {
     path: PathBuf,
 }
@@ -311,10 +322,12 @@ impl SettingsStore {
         }
         let mut settings = match value.get("version").map(serde_json::Value::as_u64) {
             None | Some(Some(1)) => migrate_v1(&value),
-            Some(Some(2)) => match serde_json::from_value::<Settings>(value) {
-                Ok(s) => s,
-                Err(_) => return self.quarantine(),
-            },
+            Some(Some(2)) => {
+                match serde_json::from_value::<Settings>(drop_unknown_sources(value)) {
+                    Ok(s) => s,
+                    Err(_) => return self.quarantine(),
+                }
+            }
             Some(_) => return self.quarantine(),
         };
         settings.clamp();
@@ -394,6 +407,25 @@ mod tests {
     }
 
     #[test]
+    fn unknown_source_is_dropped_not_quarantined() {
+        let (store, dir) = temp_store("retired");
+        let v2 = serde_json::json!({
+            "version": 2,
+            "refreshMinutes": 1,
+            "connected": ["claudeCurrent", "retiredSource", "antigravityApp"]
+        });
+        write_file(&dir, &serde_json::to_vec(&v2).unwrap());
+        let s = store.load();
+        assert_eq!(
+            s.connected,
+            [Connection::ClaudeCurrent, Connection::AntigravityApp]
+        );
+        assert_eq!(s.refresh_minutes, 1, "the rest of the file is kept");
+        assert!(!dir.join("settings.json.bad").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn v1_file_migrates() {
         let (store, dir) = temp_store("v1");
         let v1 = serde_json::json!({
@@ -403,7 +435,7 @@ mod tests {
             "alwaysOnTop": false,
             "refreshMinutes": 5,
             "overrides": { "someone@example.com": { "label": "Work" } },
-            "sources": { "direct": true, "orca": true, "omp": true },
+            "sources": { "direct": true, "omp": true },
             "collapsed": ["codex"],
             "hiddenServices": ["claude"],
             "firstRunDone": true,
@@ -496,10 +528,10 @@ mod tests {
         s.set_label("x", Some("Work".into()));
         s.set_label("y", Some("  ".into()));
         assert_eq!(s.labels.len(), 1);
-        s.set_connected(Connection::Orca, true);
-        s.set_connected(Connection::Orca, true);
-        assert_eq!(s.connected, [Connection::Orca]);
-        s.set_connected(Connection::Orca, false);
+        s.set_connected(Connection::CodexCurrent, true);
+        s.set_connected(Connection::CodexCurrent, true);
+        assert_eq!(s.connected, [Connection::CodexCurrent]);
+        s.set_connected(Connection::CodexCurrent, false);
         assert!(s.connected.is_empty());
 
         s.added_accounts.push(AddedAccount {
@@ -577,7 +609,7 @@ mod tests {
             refresh_minutes: 4,
             theme: Theme::Dark,
             material: Material::Mica,
-            connected: vec![Connection::ClaudeCurrent, Connection::Orca],
+            connected: vec![Connection::ClaudeCurrent, Connection::AntigravityApp],
             added_accounts: vec![AddedAccount {
                 id: "acct-1".into(),
                 service: Service::Codex,

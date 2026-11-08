@@ -5,7 +5,6 @@ use quotaglass_core::merge::{self, LastReadings, MergeCtx, TaskMeta, TaskRole};
 use quotaglass_core::sources::antigravity_app::AntigravityApp;
 use quotaglass_core::sources::claude_direct::ClaudeDirect;
 use quotaglass_core::sources::codex_direct::CodexDirect;
-use quotaglass_core::sources::orca::Orca;
 use quotaglass_core::view::Snapshot;
 use quotaglass_core::{Env, FetchError, Provider, Reading, Service, SourceOutcome};
 use serde::Serialize;
@@ -32,7 +31,6 @@ enum Target {
     ClaudeCurrent,
     CodexCurrent,
     AntigravityApp,
-    Orca,
     ClaudeProfile(PathBuf),
     CodexProfile(PathBuf),
 }
@@ -51,7 +49,6 @@ impl Entry {
                 TaskRole::CurrentLogin
             }
             Target::ClaudeProfile(_) | Target::CodexProfile(_) => TaskRole::AddedAccount,
-            Target::Orca => TaskRole::Other,
         }
     }
 
@@ -73,7 +70,6 @@ impl Entry {
                 local_id: self.id.clone(),
             }),
             Target::AntigravityApp => Box::new(AntigravityApp),
-            Target::Orca => Box::new(Orca::new()),
             Target::ClaudeProfile(dir) => Box::new(ClaudeDirect {
                 dir: dir.clone(),
                 local_id: self.id.clone(),
@@ -104,7 +100,6 @@ fn entries(settings: &Settings) -> Vec<Entry> {
             Connection::ClaudeCurrent => push("claude-current", Target::ClaudeCurrent),
             Connection::CodexCurrent => push("codex-current", Target::CodexCurrent),
             Connection::AntigravityApp => push("antigravity-app", Target::AntigravityApp),
-            Connection::Orca => push("orca", Target::Orca),
         }
     }
     for a in &settings.added_accounts {
@@ -136,7 +131,7 @@ fn providers_for(settings: &Settings, env: &Env) -> Vec<(String, Box<dyn Provide
         .collect()
 }
 
-/// Which one-click sources apply on this PC. Reads files and PATH only: no process starts, nothing blocks for long.
+/// Which one-click sources apply on this PC. Reads files only: no process starts, nothing blocks for long.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Detected {
@@ -144,7 +139,6 @@ pub struct Detected {
     pub codex: bool,
     /// Always true: finding the app needs a process list, so its fetch decides.
     pub antigravity_app: bool,
-    pub orca: bool,
 }
 
 pub fn detect(env: &Env) -> Detected {
@@ -152,7 +146,6 @@ pub fn detect(env: &Env) -> Detected {
         claude: env.default_claude_dir.join(".credentials.json").is_file(),
         codex: env.default_codex_dir.join("auth.json").is_file(),
         antigravity_app: true,
-        orca: env.find_on_path(&["orca.exe"]).is_some(),
     }
 }
 
@@ -574,7 +567,6 @@ mod tests {
         let settings = Settings {
             connected: vec![
                 Connection::ClaudeCurrent,
-                Connection::Orca,
                 Connection::AntigravityApp,
                 Connection::CodexCurrent,
             ],
@@ -592,7 +584,6 @@ mod tests {
             ids,
             [
                 "claude-current",
-                "orca",
                 "antigravity-app",
                 "codex-current",
                 "p1",
@@ -608,7 +599,6 @@ mod tests {
             shapes,
             [
                 (SourceKind::Direct, Some(Service::Claude)),
-                (SourceKind::Orca, Some(Service::Antigravity)),
                 (SourceKind::AntigravityApp, Some(Service::Antigravity)),
                 (SourceKind::Direct, Some(Service::Codex)),
                 (SourceKind::Direct, Some(Service::Claude)),
@@ -618,16 +608,16 @@ mod tests {
 
         // Each Direct task reads its own folder.
         let detect = |i: usize| providers[i].1.detect(&env);
-        assert!(!detect(0) && !detect(3) && !detect(4) && !detect(5));
+        assert!(!detect(0) && !detect(2) && !detect(3) && !detect(4));
         touch(home.join(".claude").join(".credentials.json"));
         touch(home.join("p2").join("auth.json"));
         assert!(detect(0), "current Claude login reads the default folder");
         assert!(
-            !detect(4),
+            !detect(3),
             "the Claude profile does not read the default folder"
         );
-        assert!(detect(5), "the Codex profile reads its own folder");
-        assert!(!detect(3));
+        assert!(detect(4), "the Codex profile reads its own folder");
+        assert!(!detect(2));
 
         assert!(providers_for(&Settings::default(), &env).is_empty());
         let _ = std::fs::remove_dir_all(&home);
@@ -663,7 +653,7 @@ mod tests {
             "a new interval restarts the timers"
         );
 
-        s.connected.push(Connection::Orca);
+        s.connected.push(Connection::CodexCurrent);
         assert!(
             st.take_settings(&s).is_some(),
             "a new task restarts the timers"
@@ -678,7 +668,7 @@ mod tests {
     fn respawn_plan_matches_state_tasks() {
         let mut st = State::new(NOW);
         let s = Settings {
-            connected: vec![Connection::Orca, Connection::ClaudeCurrent],
+            connected: vec![Connection::AntigravityApp, Connection::ClaudeCurrent],
             added_accounts: vec![added("p1", Service::Codex, PathBuf::from("C:/p1"))],
             ..Settings::default()
         };
@@ -688,7 +678,7 @@ mod tests {
         let plan_ids: Vec<&str> = plan.iter().map(|e| e.id.as_str()).collect();
         let state_ids: Vec<&str> = st.tasks.iter().flatten().map(|t| t.id.as_str()).collect();
         assert_eq!(plan_ids, state_ids);
-        assert_eq!(plan_ids, ["orca", "claude-current", "p1"]);
+        assert_eq!(plan_ids, ["antigravity-app", "claude-current", "p1"]);
         assert_eq!(plan[2].profile_dir(), Some(PathBuf::from("C:/p1")));
         assert_eq!(plan[0].profile_dir(), None);
     }
@@ -836,25 +826,22 @@ mod tests {
             Detected {
                 claude: false,
                 codex: false,
-                antigravity_app: true,
-                orca: false
+                antigravity_app: true
             }
         );
         touch(home.join(".claude").join(".credentials.json"));
         touch(home.join(".codex").join("auth.json"));
-        touch(home.join("bin").join("orca.exe"));
         assert_eq!(
             detect(&env),
             Detected {
                 claude: true,
                 codex: true,
-                antigravity_app: true,
-                orca: true
+                antigravity_app: true
             }
         );
         assert_eq!(
             serde_json::to_value(detect(&env)).unwrap(),
-            serde_json::json!({"claude": true, "codex": true, "antigravityApp": true, "orca": true})
+            serde_json::json!({"claude": true, "codex": true, "antigravityApp": true})
         );
         let _ = std::fs::remove_dir_all(&home);
     }

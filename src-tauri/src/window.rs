@@ -93,17 +93,28 @@ pub fn panel_rect(pill: WindowRect, panel_w: u32, panel_h: u32, work: MonitorRec
     }
 }
 
-/// Where the pill goes when the panel closes: on the panel's left edge, at its bottom when the
-/// panel grew up and at its top when it grew down. A panel dragged or resized while open keeps
-/// the pill on that edge.
-pub fn pill_after_close(pill_w: u32, pill_h: u32, panel_now: WindowRect, up: bool) -> WindowRect {
+/// Where the pill goes when the panel closes: at its bottom edge when the panel grew up and its
+/// top edge when it grew down, and at the same horizontal offset (`dx`) it had when the panel
+/// opened. A panel dragged or resized while open keeps the pill on that edge.
+pub fn pill_after_close(
+    pill_w: u32,
+    pill_h: u32,
+    dx: i32,
+    panel_now: WindowRect,
+    up: bool,
+) -> WindowRect {
     let y = if up {
         i64::from(panel_now.y) + i64::from(panel_now.height) - i64::from(pill_h)
     } else {
         i64::from(panel_now.y)
     };
+    // Same horizontal offset as at open, kept inside the panel if it was resized narrower.
+    let right = i64::from(panel_now.x) + i64::from(panel_now.width) - i64::from(pill_w);
+    let x = (i64::from(panel_now.x) + i64::from(dx))
+        .min(right)
+        .max(i64::from(panel_now.x));
     WindowRect {
-        x: panel_now.x,
+        x: x as i32,
         y: y as i32,
         width: pill_w,
         height: pill_h,
@@ -390,7 +401,7 @@ pub fn set_panel_open(app: &AppHandle, open: bool) -> tauri::Result<bool> {
         }
         let (w, h) = pill_size(pill_width, z);
         let back = clamp_to_monitors(
-            pill_after_close(w, h, now, panel.y < pill.y),
+            pill_after_close(w, h, pill.x - panel.x, now, panel.y < pill.y),
             &monitor_rects(&window),
         );
         window.set_min_size(None::<PhysicalSize<u32>>)?;
@@ -641,22 +652,37 @@ mod tests {
     fn close_restores_pill_rect() {
         let pill = rect(1000, 972, 440, 44);
         let panel = panel_rect(pill, 440, 344, WORK);
-        assert_eq!(pill_after_close(440, 44, panel, true), pill);
+        assert_eq!(pill_after_close(440, 44, 0, panel, true), pill);
         // Dragged 50 px left and 100 px up while open: the pill follows.
         let moved = rect(panel.x - 50, panel.y - 100, 440, 344);
         assert_eq!(
-            pill_after_close(440, 44, moved, true),
+            pill_after_close(440, 44, 0, moved, true),
             rect(950, 872, 440, 44)
         );
         // Resized from its top edge while grown up: the pill stays on the bottom edge.
         let taller = rect(panel.x, panel.y - 200, 600, 544);
-        assert_eq!(pill_after_close(440, 44, taller, true), pill);
+        assert_eq!(pill_after_close(440, 44, 0, taller, true), pill);
         // Grown down: the pill sits on the panel's top edge, whatever its height.
         let down = rect(1000, 10, 600, 500);
         assert_eq!(
-            pill_after_close(440, 44, down, false),
+            pill_after_close(440, 44, 0, down, false),
             rect(1000, 10, 440, 44)
         );
+    }
+
+    #[test]
+    fn close_returns_pill_to_its_spot_after_a_shifted_panel() {
+        // Pill docked at the right edge: the wider panel opens shifted left to fit.
+        let pill = rect(1456, 972, 440, 44);
+        let panel = panel_rect(pill, 520, 400, WORK);
+        assert_eq!(panel.x, 1920 - 520);
+        // Open and close ten times: the pill comes back to the same place every time.
+        let mut now = pill;
+        for _ in 0..10 {
+            let open = panel_rect(now, 520, 400, WORK);
+            now = pill_after_close(440, 44, now.x - open.x, open, true);
+        }
+        assert_eq!(now, pill);
     }
 
     #[test]

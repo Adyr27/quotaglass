@@ -1,10 +1,13 @@
 /* QuotaGlass, Pace Band. Smoked glass ground, ink text, colour only on fills and marks.
-   Every word is in ink: over the worst wallpaper only ink passes AA, so colour never carries text. */
+   Every word is in ink: colour never carries text.
+   The OS glass (Acrylic, Mica) brings its own dark or light tint, so the CSS tint on top stays light:
+   a smoke on Acrylic, none on Clear and Mica. Without OS glass (html.no-acrylic) the CSS tint is
+   near-solid, which keeps text at AA over any wallpaper. */
 
 :root {
   color-scheme: dark;
-  /* The CSS tint sits over the OS glass. Its alpha keeps text at AA over a white wallpaper. */
-  --tint: rgba(16, 16, 19, 0.72);
+  /* Smoked Acrylic: a light smoke over the OS glass. */
+  --tint: rgba(16, 16, 19, 0.28);
   --ink: #ffffff;
   --ink-2: #e8e8e8;
   --track: rgba(255, 255, 255, 0.16);
@@ -25,13 +28,14 @@
   --radius-control: 6px;
 }
 
-:root[data-material="clear"] {
-  --tint: rgba(16, 16, 19, 0.64);
+:root[data-material="clear"],
+:root[data-material="mica"] {
+  --tint: transparent;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --tint: rgba(246, 246, 244, 0.74);
+  --tint: rgba(246, 246, 244, 0.3);
   --ink: #111111;
   --ink-2: #333333;
   --track: rgba(0, 0, 0, 0.12);
@@ -46,16 +50,19 @@
   --primary-ink: #ffffff;
 }
 
-:root[data-theme="light"][data-material="clear"] {
-  --tint: rgba(246, 246, 244, 0.66);
+:root[data-theme="light"][data-material="clear"],
+:root[data-theme="light"][data-material="mica"] {
+  --tint: transparent;
 }
 
 /* No OS glass: a near-solid ground the UI draws itself. */
-html.no-acrylic {
+html.no-acrylic,
+html.no-acrylic[data-material] {
   --tint: rgba(16, 16, 19, 0.94);
 }
 
-html.no-acrylic[data-theme="light"] {
+html.no-acrylic[data-theme="light"],
+html.no-acrylic[data-theme="light"][data-material] {
   --tint: rgba(246, 246, 244, 0.96);
 }
 

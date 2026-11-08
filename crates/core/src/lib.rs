@@ -8,6 +8,7 @@ pub mod freshness;
 pub mod merge;
 pub mod model;
 pub mod net;
+pub mod pace;
 pub mod provider;
 pub mod secret;
 pub mod sources;

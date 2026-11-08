@@ -62,8 +62,9 @@ pub fn build(
         let live_here = live.get(id).map(Vec::as_slice).unwrap_or(&[]);
 
         // A source that answered this cycle wins over stored readings. Among them, one with numbers beats one
-        // without (Orca can list an account it has no limits for), then source priority decides. `min_by_key`
-        // keeps the first of equal keys, and the map iterates in priority order.
+        // without (Orca can list an account it has no limits for). When two readings are otherwise equal, the
+        // `SourceKind` order (Direct, AntigravityApp, Orca) breaks the tie: `min_by_key` keeps the first of
+        // equal keys, and the map iterates in that order.
         let chosen = per_source
             .iter()
             .filter(|(k, _)| live_here.contains(k))

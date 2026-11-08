@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::pace::fnv1a64;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Service {
@@ -56,9 +58,10 @@ impl AccountKey {
     }
 
     /// Key used for the in-memory last-reading store and for the UI card id.
+    /// It crosses IPC and may be persisted, so the email is hashed rather than embedded.
     pub fn store_key(&self) -> String {
         match &self.email {
-            Some(e) => format!("{}:{}", self.service.as_str(), e),
+            Some(e) => format!("{}:{:016x}", self.service.as_str(), fnv1a64(e)),
             None => format!("{}:{}", self.service.as_str(), self.local_id),
         }
     }
@@ -154,6 +157,10 @@ mod tests {
     fn email_is_normalised_and_empty_is_none() {
         let k = AccountKey::new(Service::Claude, Some("  User@Example.com "), "x");
         assert_eq!(k.merge_key().as_deref(), Some("claude:user@example.com"));
+        assert_eq!(
+            k.store_key(),
+            format!("claude:{:016x}", fnv1a64("user@example.com"))
+        );
         let k = AccountKey::new(Service::Codex, Some(""), "codex-direct");
         assert_eq!(k.merge_key(), None);
         assert_eq!(k.store_key(), "codex:codex-direct");

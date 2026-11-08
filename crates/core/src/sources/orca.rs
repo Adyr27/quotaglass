@@ -1,11 +1,10 @@
 //! Orca's own account list: `orca account list --json`.
 //!
-//! Orca already holds the Claude, Codex and Antigravity logins and their rate limits, including accounts that are
-//! not the active one. The command needs the Orca app to be running and its output shape is undocumented, so every
-//! field is checked and an unexpected shape is a `Format` error. This source runs a program and reads its stdout,
-//! plus the email in Claude Code's config file; it never touches a token.
+//! Orca is an optional third-party tool. QuotaGlass uses it for Antigravity only: Claude and Codex always come from
+//! their direct sources. The command needs the Orca app to be running and its output shape is undocumented, so every
+//! field that is read is checked and an unexpected shape is a `Format` error. This source runs a program and reads
+//! its stdout; it never touches a token.
 
-use super::claude_direct::read_email;
 use crate::env::Env;
 use crate::model::{checked_percent, AccountKey, Bucket, FetchError, Reading, Service, SourceKind};
 use crate::provider::{BoxFut, Provider};
@@ -62,6 +61,10 @@ impl Provider for Orca {
         SourceKind::Orca
     }
 
+    fn service(&self) -> Option<Service> {
+        Some(Service::Antigravity)
+    }
+
     fn detect(&self, env: &Env) -> bool {
         env.find_on_path(&["orca.exe"]).is_some()
     }
@@ -89,8 +92,7 @@ impl Provider for Orca {
             if !status.success() {
                 return Err(FetchError::Unavailable("Orca is not running"));
             }
-            let claude_email = read_email(&env.claude_dir, &env.home);
-            parse_list(&out, claude_email.as_deref(), (env.now_ms)())
+            parse_list(&out, (env.now_ms)())
         })
     }
 }
@@ -113,84 +115,23 @@ async fn read_capped(
     Ok((Some(child.wait().await?), out))
 }
 
-/// Turns the stdout of `orca account list --json` into readings.
-///
-/// Claude and Codex: the active login (`rateLimits.claude`, `rateLimits.codex`) plus every readable entry of
-/// `inactiveClaudeAccounts` / `inactiveCodexAccounts` (an entry without an email, or with bad data, is skipped on its
-/// own). The active login has no email of its own. When Orca's `activeAccountId` for the service is null, Orca uses
-/// the system login, so the email is `claude_email` (from Claude Code's config) or `codex.systemDefault.email`.
-/// When an Orca-managed account is active, no email is assumed. Antigravity: every entry of `antigravityAccounts`;
+/// Turns the stdout of `orca account list --json` into Antigravity readings: every entry of `antigravityAccounts`;
 /// an account without limits becomes a reading with no buckets. `rateLimits.antigravity` repeats the active
-/// Antigravity account and is skipped. Other providers are ignored.
+/// Antigravity account and is skipped. Claude, Codex and other providers are ignored, even when their data is bad.
 /// `ok` not true, or a missing `result` or `rateLimits`, is a `Format` error.
-pub fn parse_list(
-    stdout: &[u8],
-    claude_email: Option<&str>,
-    now_ms: i64,
-) -> Result<Vec<Reading>, FetchError> {
+pub fn parse_list(stdout: &[u8], now_ms: i64) -> Result<Vec<Reading>, FetchError> {
     let root: Value = serde_json::from_slice(stdout).map_err(|_| FetchError::Format("orca"))?;
     if root.get("ok") != Some(&Value::Bool(true)) {
         return Err(FetchError::Format("orca"));
     }
-    let result = root
+    let limits = root
         .get("result")
         .filter(|v| v.is_object())
-        .ok_or(FetchError::Format("orca"))?;
-    let limits = result
+        .ok_or(FetchError::Format("orca"))?
         .get("rateLimits")
         .filter(|v| v.is_object())
         .ok_or(FetchError::Format("orca"))?;
-    // A missing `activeAccountId` is treated like null: the system login.
-    let uses_system = |service: &str| {
-        result
-            .pointer(&format!("/{service}/activeAccountId"))
-            .is_none_or(Value::is_null)
-    };
-    let (claude_email, codex_email, codex_plan) = (
-        claude_email.filter(|_| uses_system("claude")),
-        result
-            .pointer("/codex/systemDefault/email")
-            .and_then(Value::as_str)
-            .filter(|_| uses_system("codex")),
-        result
-            .pointer("/codex/systemDefault/workspaceLabel")
-            .and_then(Value::as_str)
-            .filter(|_| uses_system("codex"))
-            .and_then(plan_from_label),
-    );
-
     let mut out = Vec::new();
-    let active = [
-        (Service::Claude, limits.get("claude"), claude_email, None),
-        (Service::Codex, limits.get("codex"), codex_email, codex_plan),
-    ];
-    for (service, entry, fallback_email, plan) in active {
-        if let Some(entry) = entry {
-            out.extend(entry_reading(
-                service,
-                entry,
-                fallback_email,
-                plan,
-                false,
-                now_ms,
-            )?);
-        }
-    }
-    for (service, list) in [
-        (Service::Claude, "inactiveClaudeAccounts"),
-        (Service::Codex, "inactiveCodexAccounts"),
-    ] {
-        for entry in limits
-            .get(list)
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if let Ok(Some(reading)) = entry_reading(service, entry, None, None, true, now_ms) {
-                out.push(reading);
-            }
-        }
-    }
     for account in limits
         .get("antigravityAccounts")
         .and_then(Value::as_array)
@@ -200,34 +141,6 @@ pub fn parse_list(
         out.extend(antigravity_reading(account, now_ms)?);
     }
     Ok(out)
-}
-
-/// One Claude or Codex login: `session` and `weekly` windows. `None` for a null entry or status "unavailable",
-/// and, when `require_email` is set, for an entry without an email.
-fn entry_reading(
-    service: Service,
-    entry: &Value,
-    fallback_email: Option<&str>,
-    plan: Option<String>,
-    require_email: bool,
-    now_ms: i64,
-) -> Result<Option<Reading>, FetchError> {
-    if !entry.is_object() || entry.get("status").and_then(Value::as_str) == Some("unavailable") {
-        return Ok(None);
-    }
-    let email = entry
-        .pointer("/usageMetadata/account/email")
-        .and_then(Value::as_str)
-        .or(fallback_email);
-    let email = email.map(str::trim).filter(|e| !e.is_empty());
-    if require_email && email.is_none() {
-        return Ok(None);
-    }
-    let mut buckets = Vec::new();
-    for (slot, fallback_name) in [("session", "Session"), ("weekly", "Weekly")] {
-        buckets.extend(window_bucket(entry.get(slot), fallback_name)?);
-    }
-    Ok(reading(service, email, None, plan, buckets, entry, now_ms))
 }
 
 fn antigravity_reading(account: &Value, now_ms: i64) -> Result<Option<Reading>, FetchError> {
@@ -242,15 +155,7 @@ fn antigravity_reading(account: &Value, now_ms: i64) -> Result<Option<Reading>, 
     let local_id = account.get("accountId").and_then(Value::as_str);
     let limits = match account.get("rateLimits") {
         None | Some(Value::Null) => {
-            return Ok(reading(
-                Service::Antigravity,
-                email,
-                local_id,
-                None,
-                Vec::new(),
-                account,
-                now_ms,
-            ));
+            return Ok(reading(email, local_id, Vec::new(), account, now_ms));
         }
         Some(l) if l.is_object() => l,
         Some(_) => return Err(FetchError::Format("orca rateLimits")),
@@ -287,25 +192,15 @@ fn antigravity_reading(account: &Value, now_ms: i64) -> Result<Option<Reading>, 
             }
         }
     }
-    Ok(reading(
-        Service::Antigravity,
-        email,
-        local_id,
-        None,
-        buckets,
-        limits,
-        now_ms,
-    ))
+    Ok(reading(email, local_id, buckets, limits, now_ms))
 }
 
 /// `observed_at` is `updatedAt` on `stamped`. Without a numeric `updatedAt`, a reading with buckets is dropped (its
 /// age is unknown, so its numbers could be shown as fresh when they are not); a reading without buckets shows no
 /// number and uses `now_ms`.
 fn reading(
-    service: Service,
     email: Option<&str>,
     local_id: Option<&str>,
-    plan: Option<String>,
     buckets: Vec<Bucket>,
     stamped: &Value,
     now_ms: i64,
@@ -315,6 +210,7 @@ fn reading(
         None if buckets.is_empty() => now_ms,
         None => return None,
     };
+    let service = Service::Antigravity;
     let local_id = local_id
         .map(str::to_string)
         .unwrap_or_else(|| format!("orca-{}", service.as_str()));
@@ -322,20 +218,12 @@ fn reading(
         key: AccountKey::new(service, email, local_id),
         label: email
             .map(str::to_string)
-            .unwrap_or_else(|| format!("{} (Orca)", service_title(service))),
-        plan,
+            .unwrap_or_else(|| "Antigravity (Orca)".to_string()),
+        plan: None,
         buckets,
         source: SourceKind::Orca,
         observed_at_ms,
     })
-}
-
-fn service_title(service: Service) -> &'static str {
-    match service {
-        Service::Claude => "Claude",
-        Service::Codex => "Codex",
-        Service::Antigravity => "Antigravity",
-    }
 }
 
 /// A `session` or `weekly` object. Null or missing means the window does not exist.
@@ -393,13 +281,6 @@ fn window_name(minutes: u64) -> String {
     }
 }
 
-/// "Personal (Free)" gives "Free".
-fn plan_from_label(label: &str) -> Option<String> {
-    let inner = label.trim_end().strip_suffix(')')?;
-    let plan = inner[inner.rfind('(')? + 1..].trim();
-    (!plan.is_empty()).then(|| plan.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,14 +314,32 @@ mod tests {
     }
 
     #[test]
+    fn orca_ignores_claude_and_codex() {
+        let readings = parse_list(LIST.as_bytes(), NOW).unwrap();
+        assert_eq!(readings.len(), 2);
+        assert!(readings
+            .iter()
+            .all(|r| r.key.service == Service::Antigravity));
+        // A broken Claude entry no longer fails the whole list.
+        let body =
+            br#"{"ok":true,"result":{"rateLimits":{"claude":{"session":{"usedPercent":"x"}}}}}"#;
+        assert_eq!(parse_list(body, NOW), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn orca_service_is_antigravity() {
+        assert_eq!(Orca::new().service(), Some(Service::Antigravity));
+    }
+
+    #[test]
     fn orca_skips_unavailable() {
-        let readings = parse_list(UNAVAILABLE.as_bytes(), None, NOW).unwrap();
+        let readings = parse_list(UNAVAILABLE.as_bytes(), NOW).unwrap();
         assert!(readings.is_empty());
     }
 
     #[test]
     fn orca_null_ratelimits_gives_empty_reading() {
-        let readings = parse_list(LIST.as_bytes(), None, NOW).unwrap();
+        let readings = parse_list(LIST.as_bytes(), NOW).unwrap();
         let empty = by_label(&readings, "c@example.com");
         assert!(empty.buckets.is_empty());
         assert_eq!(
@@ -453,7 +352,7 @@ mod tests {
 
     #[test]
     fn orca_antigravity_bucket_names() {
-        let readings = parse_list(LIST.as_bytes(), None, NOW).unwrap();
+        let readings = parse_list(LIST.as_bytes(), NOW).unwrap();
         let acc = by_label(&readings, "a@example.com");
         let names: Vec<&str> = acc.buckets.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(
@@ -479,96 +378,32 @@ mod tests {
     }
 
     #[test]
-    fn orca_codex_plan_and_email_fallback() {
-        let readings = parse_list(LIST.as_bytes(), None, NOW).unwrap();
-        let codex = by_label(&readings, "codex@example.com");
-        assert_eq!(codex.plan.as_deref(), Some("Free"));
-        assert_eq!(codex.key.service, Service::Codex);
-        assert_eq!(codex.buckets.len(), 1);
-        assert_eq!(codex.buckets[0].name, "5 hour");
-        assert_eq!(codex.buckets[0].used_percent, 52.0);
-        assert_eq!(codex.buckets[0].window_secs, Some(18_000));
-        assert_eq!(codex.observed_at_ms, 1_794_066_857_505);
-    }
-
-    #[test]
-    fn orca_claude_active_and_inactive() {
-        let readings = parse_list(LIST.as_bytes(), None, NOW).unwrap();
-        let active = by_label(&readings, "Claude@Example.com");
-        assert_eq!(active.key.email.as_deref(), Some("claude@example.com"));
-        let names: Vec<&str> = active.buckets.iter().map(|b| b.name.as_str()).collect();
-        assert_eq!(names, ["5 hour", "Weekly"]);
-        assert_eq!(active.buckets[1].used_percent, 20.0);
-        // The inactive list has one good entry; the broken, non-object and email-less entries are skipped alone.
-        let inactive = by_label(&readings, "second@example.com");
-        assert_eq!(inactive.buckets.len(), 2);
-        assert_eq!(
-            readings
-                .iter()
-                .filter(|r| r.key.service == Service::Claude)
-                .count(),
-            2
-        );
-        assert_eq!(readings.len(), 5);
-    }
-
-    #[test]
-    fn orca_system_login_email_only_when_no_managed_account_is_active() {
-        let body = |active: &str| {
-            format!(
-                r#"{{"ok":true,"result":{{
-                "claude":{{"activeAccountId":{active}}},
-                "codex":{{"activeAccountId":{active},"systemDefault":{{"email":"codex@example.com","workspaceLabel":"Personal (Free)"}}}},
-                "rateLimits":{{
-                  "claude":{{"weekly":{{"usedPercent":35,"windowMinutes":10080}},"updatedAt":1,"status":"ok","usageMetadata":{{}}}},
-                  "codex":{{"weekly":{{"usedPercent":52,"windowMinutes":10080}},"updatedAt":1,"status":"ok","usageMetadata":{{}}}}}}}}}}"#
-            )
-        };
-        let system = parse_list(body("null").as_bytes(), Some("user@example.com"), NOW).unwrap();
-        let emails: Vec<Option<&str>> = system.iter().map(|r| r.key.email.as_deref()).collect();
-        assert_eq!(
-            emails,
-            [Some("user@example.com"), Some("codex@example.com")]
-        );
-        assert_eq!(system[1].plan.as_deref(), Some("Free"));
-
-        let managed =
-            parse_list(body(r#""acc-1""#).as_bytes(), Some("user@example.com"), NOW).unwrap();
-        let labels: Vec<&str> = managed.iter().map(|r| r.label.as_str()).collect();
-        assert_eq!(labels, ["Claude (Orca)", "Codex (Orca)"]);
-        assert!(managed
-            .iter()
-            .all(|r| r.key.email.is_none() && r.plan.is_none()));
-    }
-
-    #[test]
     fn orca_drops_numbers_without_updated_at() {
-        let body = br#"{"ok":true,"result":{"rateLimits":{"claude":{"weekly":{"usedPercent":35,"windowMinutes":10080},"status":"ok"}}}}"#;
-        assert!(parse_list(body, None, NOW).unwrap().is_empty());
+        let body = br#"{"ok":true,"result":{"rateLimits":{"antigravityAccounts":[{"accountId":"a","rateLimits":{"weekly":{"usedPercent":35,"windowMinutes":10080},"status":"ok"}}]}}}"#;
+        assert!(parse_list(body, NOW).unwrap().is_empty());
     }
 
     #[test]
     fn orca_not_ok_is_format_error() {
         assert_eq!(
-            parse_list(NOT_OK.as_bytes(), None, NOW),
+            parse_list(NOT_OK.as_bytes(), NOW),
             Err(FetchError::Format("orca"))
         );
         assert_eq!(
-            parse_list(b"{\"ok\":true}", None, NOW),
+            parse_list(b"{\"ok\":true}", NOW),
             Err(FetchError::Format("orca"))
         );
         assert_eq!(
-            parse_list(b"not json", None, NOW),
+            parse_list(b"not json", NOW),
             Err(FetchError::Format("orca"))
         );
     }
 
     #[test]
-    fn orca_bad_percent_in_active_entry_is_format_error() {
-        let body =
-            br#"{"ok":true,"result":{"rateLimits":{"claude":{"session":{"usedPercent":"x"}}}}}"#;
+    fn orca_bad_percent_in_antigravity_account_is_format_error() {
+        let body = br#"{"ok":true,"result":{"rateLimits":{"antigravityAccounts":[{"rateLimits":{"session":{"usedPercent":"x"}}}]}}}"#;
         assert_eq!(
-            parse_list(body, None, NOW),
+            parse_list(body, NOW),
             Err(FetchError::Format("orca usedPercent"))
         );
     }
@@ -581,14 +416,6 @@ mod tests {
         assert_eq!(window_name(2_880), "2 days");
         assert_eq!(window_name(120), "2 h");
         assert_eq!(window_name(45), "45 min");
-    }
-
-    #[test]
-    fn plan_from_last_parentheses() {
-        assert_eq!(plan_from_label("Personal (Free)").as_deref(), Some("Free"));
-        assert_eq!(plan_from_label("Team (A) (Plus) ").as_deref(), Some("Plus"));
-        assert_eq!(plan_from_label("Personal"), None);
-        assert_eq!(plan_from_label("Personal ()"), None);
     }
 
     #[tokio::test]

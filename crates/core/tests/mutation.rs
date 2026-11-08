@@ -202,7 +202,7 @@ fn codex_usage_parser_survives_mutation() {
 #[test]
 fn orca_list_parser_survives_mutation() {
     run("orca_list.json", 0xA076_1D64_78BD_642F, |stdout| {
-        orca::parse_list(stdout, Some("user@example.com"), NOW_MS).ok()
+        orca::parse_list(stdout, NOW_MS).ok()
     });
 }
 

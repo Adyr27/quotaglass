@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::pace::fnv1a64;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Service {
@@ -18,14 +20,12 @@ impl Service {
     }
 }
 
-/// Declaration order is the merge priority: Direct beats Orca beats Omp beats SessionKey.
+/// Declaration order is the display order. `Ord` also orders the stored readings in `merge`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SourceKind {
     Direct,
-    Orca,
-    Omp,
-    SessionKey,
+    AntigravityApp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -33,7 +33,7 @@ pub struct AccountKey {
     pub service: Service,
     /// Lowercased and trimmed. `None` means the account is never merged with another reading.
     pub email: Option<String>,
-    /// Distinguishes email-less accounts, e.g. "claude-direct" or an Orca account id.
+    /// Distinguishes email-less accounts, e.g. "claude-current".
     pub local_id: String,
 }
 
@@ -57,9 +57,10 @@ impl AccountKey {
     }
 
     /// Key used for the in-memory last-reading store and for the UI card id.
+    /// It crosses IPC and may be persisted, so the email is hashed rather than embedded.
     pub fn store_key(&self) -> String {
         match &self.email {
-            Some(e) => format!("{}:{}", self.service.as_str(), e),
+            Some(e) => format!("{}:{:016x}", self.service.as_str(), fnv1a64(e)),
             None => format!("{}:{}", self.service.as_str(), self.local_id),
         }
     }
@@ -83,6 +84,8 @@ pub struct Reading {
     pub buckets: Vec<Bucket>,
     pub source: SourceKind,
     pub observed_at_ms: i64,
+    /// Codex only: banked rate-limit resets the account can redeem. `None` when the source does not say.
+    pub banked_resets: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +100,8 @@ pub enum NetErrorKind {
 pub enum FetchError {
     NotDetected,
     Expired,
+    /// The profile folder of an added account is gone. Set by the scheduler, never by a source.
+    ProfileMissing,
     Disabled,
     Unavailable(&'static str),
     Format(&'static str),
@@ -110,6 +115,7 @@ impl FetchError {
         match self {
             FetchError::NotDetected => "Not found on this PC".into(),
             FetchError::Expired => "Login expired. Open the CLI once to refresh it.".into(),
+            FetchError::ProfileMissing => "Profile folder missing".into(),
             FetchError::Disabled => "Source turned off in settings".into(),
             FetchError::Unavailable(why) => (*why).into(),
             FetchError::Format(what) => format!("Unexpected data from the source ({what})"),
@@ -139,16 +145,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_kind_priority() {
-        assert!(SourceKind::Direct < SourceKind::Orca);
-        assert!(SourceKind::Orca < SourceKind::Omp);
-        assert!(SourceKind::Omp < SourceKind::SessionKey);
+    fn source_kind_serialises_camel_case() {
+        let names: Vec<String> = [SourceKind::Direct, SourceKind::AntigravityApp]
+            .iter()
+            .map(|k| serde_json::to_string(k).unwrap())
+            .collect();
+        assert_eq!(names, ["\"direct\"", "\"antigravityApp\""]);
     }
 
     #[test]
     fn email_is_normalised_and_empty_is_none() {
         let k = AccountKey::new(Service::Claude, Some("  User@Example.com "), "x");
         assert_eq!(k.merge_key().as_deref(), Some("claude:user@example.com"));
+        assert_eq!(
+            k.store_key(),
+            format!("claude:{:016x}", fnv1a64("user@example.com"))
+        );
         let k = AccountKey::new(Service::Codex, Some(""), "codex-direct");
         assert_eq!(k.merge_key(), None);
         assert_eq!(k.store_key(), "codex:codex-direct");

@@ -15,14 +15,20 @@ use base64::Engine;
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
-const LOCAL_ID: &str = "codex-direct";
-const UNNAMED_LABEL: &str = "Codex (CLI login)";
+/// The default display name. Never the email (spec §6.3); the user can rename the account in the UI.
+const LABEL: &str = "Codex";
 
-/// The Codex login on this PC (`~/.codex/auth.json`).
-pub struct CodexDirect;
+/// One Codex login on this PC: `<dir>/auth.json`.
+///
+/// `dir` is the current login's folder (`Env::default_codex_dir`) or an added account's profile folder.
+pub struct CodexDirect {
+    pub dir: PathBuf,
+    /// The account ID part that identifies this login when it has no email, e.g. "codex-current".
+    pub local_id: String,
+}
 
 impl Provider for CodexDirect {
     fn kind(&self) -> SourceKind {
@@ -33,8 +39,8 @@ impl Provider for CodexDirect {
         Some(Service::Codex)
     }
 
-    fn detect(&self, env: &Env) -> bool {
-        env.codex_dir.join("auth.json").is_file()
+    fn detect(&self, _env: &Env) -> bool {
+        self.dir.join("auth.json").is_file()
     }
 
     fn fetch<'a>(&'a self, env: &'a Env) -> BoxFut<'a, Result<Vec<Reading>, FetchError>> {
@@ -44,7 +50,7 @@ impl Provider for CodexDirect {
                 token,
                 id_token,
                 account_id,
-            } = read_auth(&env.codex_dir)?;
+            } = read_auth(&self.dir)?;
             let exp_ms = jwt_exp_ms(token.expose()).ok_or(FetchError::Format("token exp"))?;
             if exp_ms <= now {
                 return Err(FetchError::Expired);
@@ -63,9 +69,8 @@ impl Provider for CodexDirect {
             drop(headers);
             drop(token);
             let email = id_token.as_deref().and_then(email_from_id_token);
-            let key = AccountKey::new(Service::Codex, email.as_deref(), LOCAL_ID);
-            let label = email.unwrap_or_else(|| UNNAMED_LABEL.to_string());
-            parse_usage(&body, key, label, now).map(|reading| vec![reading])
+            let key = AccountKey::new(Service::Codex, email.as_deref(), self.local_id.as_str());
+            parse_usage(&body, key, LABEL.to_string(), now).map(|reading| vec![reading])
         })
     }
 }
@@ -134,6 +139,9 @@ pub fn jwt_exp_ms(jwt: &str) -> Option<i64> {
 /// Buckets, in order: `rate_limit.primary_window`, `rate_limit.secondary_window`, and
 /// `code_review_rate_limit.primary_window` ("Code review"). Null or absent windows and every other key are
 /// ignored. No window at all is a `Format` error, as is a window without a usable percent or length.
+///
+/// `rate_limit_reset_credits.available_count` becomes `banked_resets` (saturated to `u32::MAX`). When it is
+/// absent, null or not a whole number from 0 up, `banked_resets` is `None`; it is never an error.
 pub fn parse_usage(
     body: &[u8],
     key: AccountKey,
@@ -166,6 +174,11 @@ pub fn parse_usage(
         .get("plan_type")
         .and_then(Value::as_str)
         .and_then(capitalise);
+    let banked_resets = root
+        .get("rate_limit_reset_credits")
+        .and_then(|c| c.get("available_count"))
+        .and_then(Value::as_u64)
+        .map(|n| u32::try_from(n).unwrap_or(u32::MAX));
     Ok(Reading {
         key,
         label,
@@ -173,6 +186,7 @@ pub fn parse_usage(
         buckets,
         source: SourceKind::Direct,
         observed_at_ms: now_ms,
+        banked_resets,
     })
 }
 
@@ -286,12 +300,103 @@ mod tests {
         test_env(&home.0, HttpClient::for_test(base), now_ms)
     }
 
+    const LOCAL_ID: &str = "codex-current";
+
+    /// The source for the default `.codex` folder inside `home`.
+    fn source(home: &TempHome) -> CodexDirect {
+        CodexDirect {
+            dir: home.0.join(".codex"),
+            local_id: LOCAL_ID.into(),
+        }
+    }
+
     fn key() -> AccountKey {
         AccountKey::new(Service::Codex, Some("user@example.com"), LOCAL_ID)
     }
 
     fn parse(body: &str) -> Result<Reading, FetchError> {
-        parse_usage(body.as_bytes(), key(), "user@example.com".into(), now())
+        parse_usage(body.as_bytes(), key(), "Codex".into(), now())
+    }
+
+    const USAGE_RESETS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/codex_usage_with_resets.json"
+    ));
+
+    #[test]
+    fn banked_resets_read_when_present() {
+        let reading = parse(USAGE_RESETS).unwrap();
+        assert_eq!(reading.banked_resets, Some(1));
+        assert_eq!(reading.buckets.len(), 3);
+        // A count beyond u32 saturates instead of failing.
+        let big = parse(
+            r#"{"rate_limit":{"primary_window":{"used_percent":5,"limit_window_seconds":18000}},"rate_limit_reset_credits":{"available_count":99999999999}}"#,
+        )
+        .unwrap();
+        assert_eq!(big.banked_resets, Some(u32::MAX));
+    }
+
+    #[test]
+    fn banked_resets_absent_is_none() {
+        assert_eq!(parse(USAGE_REVIEW).unwrap().banked_resets, None);
+        for credits in [
+            "null",
+            "{}",
+            r#"{"available_count":null}"#,
+            r#"{"available_count":"3"}"#,
+            r#"{"available_count":-1}"#,
+            r#"{"available_count":1.5}"#,
+            r#""x""#,
+            "[]",
+        ] {
+            let body = format!(
+                r#"{{"rate_limit":{{"primary_window":{{"used_percent":5,"limit_window_seconds":18000}}}},"rate_limit_reset_credits":{credits}}}"#
+            );
+            assert_eq!(parse(&body).unwrap().banked_resets, None, "{credits}");
+        }
+    }
+
+    #[tokio::test]
+    async fn label_is_never_email() {
+        let home = TempHome::new("codex-label");
+        home.write(".codex/auth.json", AUTH);
+        let server = MockServer::start(vec![(200, "", USAGE_FREE.to_string())]);
+        let env = env_for(&home, &server.base, now);
+
+        let readings = source(&home).fetch(&env).await.unwrap();
+
+        assert_eq!(readings[0].label, "Codex");
+        assert!(!readings[0].label.contains('@'));
+        // The email still identifies the account.
+        assert_eq!(readings[0].key, key());
+    }
+
+    #[tokio::test]
+    async fn profile_dir_is_used() {
+        let home = TempHome::new("codex-profile");
+        let profile = home.0.join("profile-a");
+        let empty = home.0.join("profile-b");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::write(profile.join("auth.json"), AUTH).unwrap();
+        let server = MockServer::start(vec![(200, "", USAGE_FREE.to_string())]);
+        let env = env_for(&home, &server.base, now);
+        let in_profile = CodexDirect {
+            dir: profile,
+            local_id: "profile-a".into(),
+        };
+        let in_empty = CodexDirect {
+            dir: empty,
+            local_id: "profile-b".into(),
+        };
+
+        assert!(in_profile.detect(&env));
+        assert!(!in_empty.detect(&env));
+        // The default `.codex` folder is empty, so a reading proves the profile folder was read.
+        assert!(!source(&home).detect(&env));
+        let readings = in_profile.fetch(&env).await.unwrap();
+        assert_eq!(readings[0].key.local_id, "profile-a");
+        assert_eq!(in_empty.fetch(&env).await, Err(FetchError::NotDetected));
     }
 
     fn expected(name: &str, used_percent: f64, window_secs: u64, resets_at_ms: i64) -> Bucket {
@@ -310,7 +415,7 @@ mod tests {
         let server = MockServer::start(vec![(200, "", USAGE_FREE.to_string())]);
         let env = env_for(&home, &server.base, now);
 
-        let readings = CodexDirect.fetch(&env).await.unwrap();
+        let readings = source(&home).fetch(&env).await.unwrap();
 
         assert_eq!(readings.len(), 1);
         let reading = &readings[0];
@@ -320,7 +425,7 @@ mod tests {
         );
         assert_eq!(reading.plan.as_deref(), Some("Free"));
         assert_eq!(reading.key, key());
-        assert_eq!(reading.label, "user@example.com");
+        assert_eq!(reading.label, "Codex");
         assert_eq!(reading.source, SourceKind::Direct);
         assert_eq!(reading.observed_at_ms, now());
     }
@@ -426,7 +531,7 @@ mod tests {
         let server = MockServer::start(vec![(200, "", USAGE_FREE.to_string())]);
         let env = env_for(&home, &server.base, after_expiry);
 
-        let result = CodexDirect.fetch(&env).await;
+        let result = source(&home).fetch(&env).await;
 
         assert_eq!(result, Err(FetchError::Expired));
         assert_eq!(server.hits(), 0);
@@ -442,7 +547,7 @@ mod tests {
         let server = MockServer::start(vec![(200, "", USAGE_FREE.to_string())]);
         let env = env_for(&home, &server.base, now);
 
-        let result = CodexDirect.fetch(&env).await;
+        let result = source(&home).fetch(&env).await;
 
         assert_eq!(result, Err(FetchError::Format("token exp")));
         assert_eq!(server.hits(), 0);
@@ -452,11 +557,14 @@ mod tests {
     async fn codex_missing_auth_json_is_not_detected() {
         let home = TempHome::new("codex-missing");
         let env = env_for(&home, "http://127.0.0.1:9", now);
-        assert!(!CodexDirect.detect(&env));
-        assert_eq!(CodexDirect.fetch(&env).await, Err(FetchError::NotDetected));
+        assert!(!source(&home).detect(&env));
+        assert_eq!(
+            source(&home).fetch(&env).await,
+            Err(FetchError::NotDetected)
+        );
 
         home.write(".codex/auth.json", AUTH);
-        assert!(CodexDirect.detect(&env));
+        assert!(source(&home).detect(&env));
     }
 
     #[test]
@@ -484,7 +592,7 @@ mod tests {
         let server = MockServer::start(vec![(200, "", USAGE_REVIEW.to_string())]);
         let env = env_for(&home, &server.base, now);
 
-        CodexDirect.fetch(&env).await.unwrap();
+        source(&home).fetch(&env).await.unwrap();
 
         let request = server.last_request.lock().unwrap().to_lowercase();
         assert!(request.starts_with("get /backend-api/wham/usage "));
@@ -507,11 +615,11 @@ mod tests {
         let server = MockServer::start(vec![(200, "", USAGE_FREE.to_string())]);
         let env = env_for(&home, &server.base, now);
 
-        let readings = CodexDirect.fetch(&env).await.unwrap();
+        let readings = source(&home).fetch(&env).await.unwrap();
 
         let request = server.last_request.lock().unwrap().to_lowercase();
         assert!(!request.contains("chatgpt-account-id"));
-        assert_eq!(readings[0].label, "Codex (CLI login)");
+        assert_eq!(readings[0].label, "Codex");
         assert_eq!(readings[0].key.email, None);
     }
 }

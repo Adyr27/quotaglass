@@ -1,17 +1,66 @@
 # QuotaGlass
 
-QuotaGlass is a small Windows desktop widget. It shows how much of each AI plan limit you have used, for every account that is signed in on your PC.
+QuotaGlass is a Windows desktop widget that shows plan-limit usage for Claude, Codex and Antigravity. It sits on the desktop as a pill that opens into a panel. The pill shows each account as its provider's icon and the percent used.
 
-It shows Claude, Codex and Antigravity accounts. Each account shows its 5-hour, weekly and per-model limits, with the time each limit resets.
+Each limit appears as a pace strip. The solid fill shows the percentage of the limit used. A marker shows the share of the time window that has passed. When usage runs ahead of time (`used >= 1.5 x passed` and `used >= 20`), the strip shows "fast burn" in red.
 
-QuotaGlass reads numbers only from real sources. It never asks you to type a number, and it never guesses one.
+"Best now" marks the account with the most room left across its limits. If accounts tie on room left, the one whose worst limit resets sooner wins. This mark appears in the open panel when at least two accounts are readable.
+
+## Accounts
+
+Nothing is read until the person connects a source on the first screen.
+
+- "Use my current Claude login" and "Use my current Codex login" read `~/.claude` and `~/.codex` read-only.
+- "+ Add account" makes a profile folder in `%APPDATA%\QuotaGlass\profiles\<id>` and opens the real CLI sign-in in a console.
+- Remove signs that profile out on this PC and deletes its folder.
+- The current CLI login cannot be removed; it can only be hidden.
+
+## Antigravity
+
+Antigravity quota is read from the running Antigravity app's local server on this PC (`127.0.0.1`), only while the app is open. No Google sign-in is used.
+
+## Warnings
+
+Warnings fire at 50, 80 and 90 percent, once per limit window, stored in `%APPDATA%\QuotaGlass\warnings.json`.
+
+- The 50 and 80 percent warnings are silent toasts.
+- The 90 percent toast plays a sound. It is a normal toast (the notification plugin cannot keep it on screen).
+
+## Window and settings
+
+You can drag the pill anywhere. You can stretch it sideways and resize the panel. Sizes are remembered across runs. The window follows Windows text size.
+
+Settings:
+- Theme (System, Light, Dark)
+- Glass (Acrylic, Mica, Clear)
+- Always on top (on by default)
+- Start with Windows
+- Refresh every 1, 2 or 5 min
+- Sources
+- Account names
+- Hidden accounts
+
+Glass shows as a solid colour while Windows "Transparency effects" is off (Settings > Personalization > Colors). Mica looks nearly solid by design.
+
+## Known limits
+
+A CLI installed under a folder whose path has `&`, `|`, `<`, `>`, `^`, `%`, `!`, `"`, `(`, or `)` is refused. This includes `C:\Program Files (x86)`. Normal npm installs work.
+
+## Privacy and safety
+
+- No emails or tokens in labels, logs, notifications or settings keys.
+- Vendor login files are read-only.
+- Tokens are never refreshed.
+- No Windows Credential Manager or Google session use.
+- No telemetry, analytics, crash uploads or auto-updates.
+- Settings are stored in `%APPDATA%\QuotaGlass\settings.json`.
 
 ## Install
 
 1. Download `QuotaGlass_<version>_x64-setup.exe` and `SHA256SUMS.txt` from the latest release.
 2. Open PowerShell in the download folder.
 3. Run `Get-FileHash .\QuotaGlass_*_x64-setup.exe -Algorithm SHA256`.
-4. Make sure that the hash is the same as the hash in `SHA256SUMS.txt`. If it is different, do not run the file.
+4. Make sure that the hash matches the hash in `SHA256SUMS.txt`. If it is different, do not run the file.
 5. Run the installer.
 
 The installer is not code-signed. Windows SmartScreen can show "Windows protected your PC". To continue, select **More info**, then **Run anyway**.
@@ -19,7 +68,6 @@ The installer is not code-signed. Windows SmartScreen can show "Windows protecte
 ## Build from source
 
 Prerequisites:
-
 - Windows 10 or 11, x64.
 - Rust stable for MSVC (`rustup default stable-x86_64-pc-windows-msvc`).
 - Visual Studio 2022 Build Tools with the "Desktop development with C++" workload.
@@ -27,54 +75,11 @@ Prerequisites:
 - Node.js 22 or later.
 
 Commands:
-
 1. `npm install`
-2. `npm run tauri dev` starts the widget in development mode.
-3. `npm run tauri build` makes the installer in `target/release/bundle/nsis/`.
-4. `cargo test --workspace` runs the tests.
-
-## Where the numbers come from
-
-No AI vendor publishes an official API for plan limits. Each source below is either another tool on your PC or an endpoint that the vendor does not document. A vendor can change an undocumented endpoint at any time. If a source stops working, its cards show the reason and QuotaGlass uses the next source.
-
-| Source | What it reads | Accounts it covers | Default |
-|---|---|---|---|
-| Claude Code login file | `~/.claude/.credentials.json`, then `GET api.anthropic.com/api/oauth/usage` | The account signed in to Claude Code | On (unofficial endpoint) |
-| Codex login file | `~/.codex/auth.json`, then `GET chatgpt.com/backend-api/wham/usage` | The account signed in to the Codex CLI or the Codex app | On (unofficial endpoint) |
-| Orca | The output of `orca account list --json` | Claude and Codex accounts in Orca, and all Antigravity accounts in Orca | On, if Orca is installed |
-| OMP | `~/.omp/agent/agent.db`, read-only | Claude and Antigravity accounts signed in to OMP | On, if OMP is installed |
-
-If two sources report the same account, QuotaGlass shows one card. It uses the email address to match accounts. If a source gives no email address, QuotaGlass does not merge that account with another.
-
-You can turn off each source in **Settings > Sources**.
-
-When two or more sources read the same account, QuotaGlass picks one in this order: direct, Orca, OMP. To use a different source for one account, click its card and choose under **Source**. Choose **Auto** to go back to the normal order.
-
-## Accounts that QuotaGlass cannot read
-
-| You use only... | Result |
-|---|---|
-| ChatGPT chat (no Codex) | No card. There is no known source for ChatGPT chat limits. |
-| The Antigravity IDE or `agy`, without Orca | No card. Antigravity keeps its login in encrypted app storage. QuotaGlass reads Antigravity limits only through Orca. |
-| Claude Desktop or claude.ai, without Claude Code | No card. Sign in to Claude Code, or add the account to Orca. |
-
-QuotaGlass does not have a manual entry field. A typed number becomes wrong as soon as you use the tool, and QuotaGlass does not show numbers that it cannot keep correct.
-
-## Sign in
-
-If a Claude or Codex login expires, the card shows **Sign in**. This button opens a terminal that runs the official sign-in command (`claude auth login` or `codex login`). Your browser opens the vendor sign-in page. QuotaGlass never sees your password.
-
-Antigravity has no sign-in command. To add an Antigravity account, sign in with `agy`. Then add the account in Orca, in **Settings > AI Provider Accounts**.
-
-## Privacy and security
-
-- QuotaGlass connects only to `api.anthropic.com` and `chatgpt.com`, over HTTPS. It does not follow redirects.
-- QuotaGlass has no telemetry, no analytics, no crash upload and no update check.
-- QuotaGlass reads the login tokens of Claude Code and Codex only in memory, for one request. It does not copy them, store them or show them.
-- QuotaGlass never refreshes a login token. A refresh can sign you out of the CLI.
-- QuotaGlass opens the files of other apps read-only.
-- QuotaGlass keeps its settings in `%APPDATA%\QuotaGlass\settings.json`. This file contains no tokens.
-- QuotaGlass does not update itself. To update, download the new release.
+2. `cargo test --workspace`
+3. `npm run build`
+4. `npm run tauri dev` starts the widget in development mode.
+5. `npm run tauri build` makes the installer in `target/release/bundle/nsis/`.
 
 ## License
 

@@ -2,15 +2,11 @@
 
 export type Service = "claude" | "codex" | "antigravity";
 
-/** "sessionKey" is not built yet. It stays here only so a card can label a reading that carries it. */
-export type SourceKind = "direct" | "orca" | "omp" | "sessionKey";
-
-/** The sources a person can switch on or off in the Sources rows. */
-export type SwitchableSource = "direct" | "orca" | "omp";
+export type SourceKind = "direct" | "antigravityApp";
 
 export type Freshness = "live" | "aged" | "stale";
 
-export type CardState = "ok" | "noReadingYet" | "error" | "noSource";
+export type CardState = "ok" | "noReadingYet" | "error" | "noSource" | "loginExpired" | "profileMissing";
 
 export interface BucketView {
   name: string;
@@ -19,6 +15,9 @@ export interface BucketView {
   resetsAtMs: number | null;
   limitReached: boolean;
   freshness: Freshness;
+  /** Share of the window that has passed, 0..100. Null without a window length and a reset time. */
+  passedPercent: number | null;
+  fastBurn: boolean;
 }
 
 export interface AccountView {
@@ -27,16 +26,22 @@ export interface AccountView {
   label: string;
   plan: string | null;
   source: SourceKind | null;
-  /** Every source with a reading for this account, in priority order. */
-  sources: SourceKind[];
   freshness: Freshness;
   ageSecs: number | null;
   headline: BucketView | null;
-  extraBuckets: number;
   buckets: BucketView[];
   state: CardState;
   reason: string | null;
-  connect: Service | null;
+  /** 100 minus the highest used % over the limits that still hold. */
+  roomLeft: number | null;
+  bestNow: boolean;
+  /** Codex only. Null when the source does not say. */
+  bankedResets: number | null;
+  /** The added account (profile) that reads this account. */
+  profileId: string | null;
+  currentLogin: boolean;
+  pinned: boolean;
+  hidden: boolean;
 }
 
 export interface Snapshot {
@@ -51,46 +56,65 @@ export interface WindowRect {
   height: number;
 }
 
-export type SourceSwitches = Record<SwitchableSource, boolean>;
+export type Theme = "system" | "light" | "dark";
+
+export type Material = "acrylic" | "mica" | "clear";
+
+/** A one-click source the person switched on. */
+export type Connection = "claudeCurrent" | "codexCurrent" | "antigravityApp";
+
+/** An account signed in through "+ Add account". Its login stays in `profileDir`. */
+export interface AddedAccount {
+  id: string;
+  service: Service;
+  profileDir: string;
+}
 
 export interface Settings {
-  version: 1;
-  window: WindowRect | null;
-  pinned: boolean;
+  version: 2;
+  pillPosition: WindowRect | null;
+  /** The panel size in CSS px as the person left it. */
+  panelSize: { width: number; height: number } | null;
+  /** The pill width in CSS px. */
+  pillWidth: number | null;
   alwaysOnTop: boolean;
   autostart: boolean;
   refreshMinutes: number;
-  sources: SourceSwitches;
-  overrides: {
-    pinned: Record<string, SourceKind>;
-    disabled: Record<string, SourceKind[]>;
-  };
-  collapsed: Service[];
-  hiddenServices: Service[];
-  firstRunDone: boolean;
+  theme: Theme;
+  material: Material;
+  connected: Connection[];
+  addedAccounts: AddedAccount[];
+  /** Account IDs in display order, at most 4. */
+  pinnedAccounts: string[];
+  hiddenAccounts: string[];
+  /** Account ID to label, at most 40 characters each. */
+  labels: Record<string, string>;
 }
 
 export type SettingsPatch = Partial<
   Pick<
     Settings,
-    | "pinned"
     | "alwaysOnTop"
     | "autostart"
     | "refreshMinutes"
-    | "sources"
-    | "overrides"
-    | "collapsed"
-    | "hiddenServices"
-    | "firstRunDone"
+    | "theme"
+    | "material"
+    | "connected"
+    | "pinnedAccounts"
+    | "hiddenAccounts"
+    | "labels"
   >
 >;
 
-export interface SourceStatus {
-  kind: SwitchableSource;
-  detected: boolean;
-  enabled: boolean;
-  unofficial: boolean;
+/** Which one-click sources apply on this PC. `antigravityApp` is always true: its fetch decides. */
+export interface Detected {
+  claude: boolean;
+  codex: boolean;
+  antigravityApp: boolean;
 }
+
+/** A page the app may open in the browser. The UI names it; the app holds the URL. */
+export type UrlTarget = "openAiUsage";
 
 export interface BackdropPayload {
   acrylic: boolean;

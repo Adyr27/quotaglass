@@ -28,8 +28,37 @@ pub enum HeaderValueSource<'a> {
 
 const MAX_BODY: usize = 1024 * 1024;
 
+/// Builds `http://127.0.0.1:{port}{path}`. The host is fixed; `path` must be a plain absolute path.
+/// Rejects a path without a leading `/`, and any `@`, `://`, backslash, whitespace or control character, so the
+/// path can never name another host or user.
+fn loopback_url(port: u16, path: &str) -> Result<String, FetchError> {
+    let plain = path.starts_with('/')
+        && !path.contains('@')
+        && !path.contains("://")
+        && !path
+            .chars()
+            .any(|c| c == '\\' || c.is_whitespace() || c.is_control());
+    if port == 0 || !plain {
+        return Err(FetchError::Network(NetErrorKind::Blocked));
+    }
+    Ok(format!("http://127.0.0.1:{port}{path}"))
+}
+
+/// The only plain-HTTP client: loopback only, no proxy, no redirects, 5 s timeout.
+fn loopback_client() -> Result<reqwest::Client, FetchError> {
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .user_agent(concat!("QuotaGlass/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|_| FetchError::Network(NetErrorKind::Connect))
+}
+
 pub struct HttpClient {
     client: reqwest::Client,
+    /// Used only through `loopback_url`, so it can reach nothing but `127.0.0.1`.
+    loopback: reqwest::Client,
     #[cfg(test)]
     base_override: Option<String>,
 }
@@ -45,6 +74,7 @@ impl HttpClient {
             .map_err(|_| FetchError::Network(NetErrorKind::Connect))?;
         Ok(Self {
             client,
+            loopback: loopback_client()?,
             #[cfg(test)]
             base_override: None,
         })
@@ -60,6 +90,7 @@ impl HttpClient {
             .expect("test client");
         Self {
             client,
+            loopback: loopback_client().expect("loopback client"),
             base_override: Some(base.to_string()),
         }
     }
@@ -70,6 +101,36 @@ impl HttpClient {
             return format!("{base}{path}");
         }
         format!("{}{}", host.base(), path)
+    }
+
+    /// GET `http://127.0.0.1:{port}{path}`. Same redirect and size rules as `get_json`.
+    pub async fn get_loopback(&self, port: u16, path: &str) -> Result<Vec<u8>, FetchError> {
+        let url = loopback_url(port, path)?;
+        let resp = self.loopback.get(url).send().await.map_err(map_err)?;
+        read_body(resp).await
+    }
+
+    /// POST a JSON body to `http://127.0.0.1:{port}{path}`, with `x-codeium-csrf-token` when `csrf` is set.
+    pub async fn post_loopback(
+        &self,
+        port: u16,
+        path: &str,
+        csrf: Option<&str>,
+        body: &[u8],
+    ) -> Result<Vec<u8>, FetchError> {
+        let url = loopback_url(port, path)?;
+        let mut req = self
+            .loopback
+            .post(url)
+            .header("content-type", "application/json")
+            .body(body.to_vec());
+        if let Some(token) = csrf {
+            let mut v = HeaderValue::from_str(token).map_err(|_| FetchError::Format("csrf"))?;
+            v.set_sensitive(true);
+            req = req.header("x-codeium-csrf-token", v);
+        }
+        let resp = req.send().await.map_err(map_err)?;
+        read_body(resp).await
     }
 
     /// GET an allowlisted host. Redirects are errors. Bodies over 1 MiB are rejected.
@@ -97,33 +158,38 @@ impl HttpClient {
             };
             map.insert(HeaderName::from_static(name), value);
         }
-        let mut resp = self
+        let resp = self
             .client
             .get(self.url(host, path))
             .headers(map)
             .send()
             .await
             .map_err(map_err)?;
-        let status = resp.status();
-        if status.is_redirection() {
-            return Err(FetchError::Network(NetErrorKind::Blocked));
-        }
-        if !status.is_success() {
-            return Err(FetchError::Network(NetErrorKind::Status(status.as_u16())));
-        }
-        if resp.content_length().is_some_and(|n| n as usize > MAX_BODY) {
+        read_body(resp).await
+    }
+}
+
+/// Redirects are errors. Bodies over 1 MiB are rejected.
+async fn read_body(mut resp: reqwest::Response) -> Result<Vec<u8>, FetchError> {
+    let status = resp.status();
+    if status.is_redirection() {
+        return Err(FetchError::Network(NetErrorKind::Blocked));
+    }
+    if !status.is_success() {
+        return Err(FetchError::Network(NetErrorKind::Status(status.as_u16())));
+    }
+    if resp.content_length().is_some_and(|n| n as usize > MAX_BODY) {
+        return Err(FetchError::Format("response too large"));
+    }
+    // Count while reading: a chunked body has no length up front.
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(map_err)? {
+        if body.len() + chunk.len() > MAX_BODY {
             return Err(FetchError::Format("response too large"));
         }
-        // Count while reading: a chunked body has no length up front.
-        let mut body = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(map_err)? {
-            if body.len() + chunk.len() > MAX_BODY {
-                return Err(FetchError::Format("response too large"));
-            }
-            body.extend_from_slice(&chunk);
-        }
-        Ok(body)
+        body.extend_from_slice(&chunk);
     }
+    Ok(body)
 }
 
 fn map_err(e: reqwest::Error) -> FetchError {
@@ -167,6 +233,91 @@ mod tests {
         let http = HttpClient::for_test(&server.base);
         let err = http.get_json(Host::ChatGpt, "/x", &[]).await.unwrap_err();
         assert_eq!(err, FetchError::Network(NetErrorKind::Status(401)));
+    }
+
+    #[test]
+    fn loopback_url_is_fixed_host() {
+        assert_eq!(loopback_url(51234, "/").unwrap(), "http://127.0.0.1:51234/");
+        assert_eq!(
+            loopback_url(80, "/exa.x/Get").unwrap(),
+            "http://127.0.0.1:80/exa.x/Get"
+        );
+        let blocked = Err(FetchError::Network(NetErrorKind::Blocked));
+        for path in [
+            "",
+            "x",
+            "evil.example/",
+            "/@evil.example",
+            "/a@b",
+            "/http://evil.example",
+            "/a b",
+            "/a\\b",
+            "/a\r\nHost: x",
+        ] {
+            assert_eq!(loopback_url(1234, path), blocked, "{path:?}");
+        }
+        assert_eq!(loopback_url(0, "/"), blocked);
+    }
+
+    #[tokio::test]
+    async fn loopback_get_and_post() {
+        let server = MockServer::start(vec![
+            (200, "", "page".to_string()),
+            (200, "", "{}".to_string()),
+        ]);
+        let port: u16 = server.base.rsplit(':').next().unwrap().parse().unwrap();
+        let http = HttpClient::new().unwrap();
+        assert_eq!(http.get_loopback(port, "/").await.unwrap(), b"page");
+        let body = http
+            .post_loopback(port, "/svc/Call", Some("tok-1"), b"{}")
+            .await
+            .unwrap();
+        assert_eq!(body, b"{}");
+        let req = server.last_request.lock().unwrap().to_ascii_lowercase();
+        assert!(req.starts_with("post /svc/call http/1.1"), "{req}");
+        assert!(req.contains("x-codeium-csrf-token: tok-1"));
+        assert!(req.contains("content-type: application/json"));
+        assert!(req.ends_with("{}"));
+    }
+
+    #[tokio::test]
+    async fn loopback_without_csrf_and_errors() {
+        let server = MockServer::start(vec![
+            (200, "", "{}".to_string()),
+            (302, "Location: http://evil.example/\r\n", String::new()),
+            (404, "", String::new()),
+        ]);
+        let port: u16 = server.base.rsplit(':').next().unwrap().parse().unwrap();
+        let http = HttpClient::new().unwrap();
+        http.post_loopback(port, "/x", None, b"{}").await.unwrap();
+        let req = server.last_request.lock().unwrap().to_ascii_lowercase();
+        assert!(!req.contains("x-codeium-csrf-token"));
+        assert_eq!(
+            http.get_loopback(port, "/").await,
+            Err(FetchError::Network(NetErrorKind::Blocked))
+        );
+        assert_eq!(
+            http.get_loopback(port, "/").await,
+            Err(FetchError::Network(NetErrorKind::Status(404)))
+        );
+        assert_eq!(
+            http.get_loopback(port, "nope").await,
+            Err(FetchError::Network(NetErrorKind::Blocked))
+        );
+    }
+
+    #[tokio::test]
+    async fn loopback_closed_port_is_connect_error() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let http = HttpClient::new().unwrap();
+        assert_eq!(
+            http.get_loopback(port, "/").await,
+            Err(FetchError::Network(NetErrorKind::Connect))
+        );
     }
 
     #[test]

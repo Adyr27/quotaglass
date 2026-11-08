@@ -126,6 +126,15 @@ export function iconSliders(): SVGElement {
   ]);
 }
 
+export function iconBack(): SVGElement {
+  return icon(16, [shape("M10 3.5L5.5 8l4.5 4.5")]);
+}
+
+/** The provider's icon, drawn by CSS from `src/assets/providers/<service>.svg` in the provider's colour. */
+export function providerMark(service: string, cls = "mark"): HTMLSpanElement {
+  return h("span", { class: cls, "data-service": service, "aria-hidden": "true" });
+}
+
 export function iconChevron(cls: string): SVGElement {
   return icon(16, [shape("M4 6.25l4 4 4-4")], cls);
 }

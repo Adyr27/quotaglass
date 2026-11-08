@@ -1,10 +1,10 @@
-//! Mutation tests for every parser that reads data QuotaGlass does not control (vendor endpoints, Orca output,
+//! Mutation tests for every parser that reads data QuotaGlass does not control (vendor endpoints, app output,
 //! login files). Each fixture is mutated thousands of times, by JSON structure and by raw bytes. A parser may
 //! reject the input, but it must never panic (debug builds also panic on integer overflow), and a reading it
 //! accepts must hold only finite percentages from 0 to 100.
 
-use quotaglass_core::sources::{claude_direct, codex_direct, orca};
-use quotaglass_core::{AccountKey, Reading, Service};
+use quotaglass_core::sources::{antigravity_app, claude_direct, codex_direct};
+use quotaglass_core::{AccountKey, Reading, Service, SourceKind};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -200,10 +200,27 @@ fn codex_usage_parser_survives_mutation() {
 }
 
 #[test]
-fn orca_list_parser_survives_mutation() {
-    run("orca_list.json", 0xA076_1D64_78BD_642F, |stdout| {
-        orca::parse_list(stdout, Some("user@example.com"), NOW_MS).ok()
-    });
+fn antigravity_quota_parser_survives_mutation() {
+    for (i, name) in ["ag_quota_summary.json", "ag_quota_summary_snake.json"]
+        .into_iter()
+        .enumerate()
+    {
+        run(name, 0x2545_F491_4F6C_DD1D + i as u64, |body| {
+            antigravity_app::parse_quota_summary(body)
+                .ok()
+                .map(|buckets| {
+                    vec![Reading {
+                        key: key(Service::Antigravity),
+                        label: "Antigravity".into(),
+                        plan: None,
+                        buckets,
+                        source: SourceKind::AntigravityApp,
+                        observed_at_ms: NOW_MS,
+                        banked_resets: None,
+                    }]
+                })
+        });
+    }
 }
 
 /// A per-process scratch folder; removed when the test ends.

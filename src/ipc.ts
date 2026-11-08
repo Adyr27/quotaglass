@@ -3,7 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { BackdropPayload, Service, Settings, SettingsPatch, Snapshot, SourceStatus } from "./types";
+import type { BackdropPayload, Connection, Detected, Service, Settings, SettingsPatch, Snapshot, UrlTarget } from "./types";
 
 export type Result<T> = { ok: true; value: T } | { ok: false };
 
@@ -69,8 +69,8 @@ export function refreshNow(): Promise<Result<void>> {
   return call<void>("refresh_now", "Could not refresh.");
 }
 
-export function detectSources(): Promise<Result<SourceStatus[]>> {
-  return call<SourceStatus[]>("detect_sources", "Could not check this PC for sources.");
+export function detect(): Promise<Result<Detected>> {
+  return call<Detected>("detect", "Could not check this PC for sources.");
 }
 
 export function getSettings(): Promise<Result<Settings>> {
@@ -83,6 +83,38 @@ export function updateSettings(patch: SettingsPatch): Promise<Result<Settings>> 
 
 export function connect(service: Service): Promise<Result<void>> {
   return call<void>("connect", "Could not open the sign-in window.", { service });
+}
+
+export function addAccount(service: Service): Promise<Result<Settings>> {
+  return call<Settings>("add_account", "Could not add the account.", { service });
+}
+
+export function openCli(accountId: string): Promise<Result<void>> {
+  return call<void>("open_cli", "Could not open the console.", { accountId });
+}
+
+export function removeAccount(accountId: string): Promise<Result<Settings>> {
+  return call<Settings>("remove_account", "Could not remove the account.", { accountId });
+}
+
+export function setHidden(accountId: string, hidden: boolean): Promise<Result<Settings>> {
+  return call<Settings>("set_hidden", "Could not change that account.", { accountId, hidden });
+}
+
+export function setPinned(accountId: string, pinned: boolean): Promise<Result<Settings>> {
+  return call<Settings>("set_pinned", "Could not change the pin.", { accountId, pinned });
+}
+
+export function setLabel(accountId: string, label: string | null): Promise<Result<Settings>> {
+  return call<Settings>("set_label", "Could not save the name.", { accountId, label });
+}
+
+export function connectSource(conn: Connection, on: boolean): Promise<Result<Settings>> {
+  return call<Settings>("connect_source", "Could not change that source.", { conn, on });
+}
+
+export function openUrl(target: UrlTarget): Promise<Result<void>> {
+  return call<void>("open_url", "Could not open the browser.", { target });
 }
 
 async function subscribe<T>(event: string, handler: (payload: T) => void): Promise<void> {
@@ -107,4 +139,17 @@ export function onBackdrop(handler: (payload: BackdropPayload) => void): Promise
 
 export function onOpenSettings(handler: () => void): Promise<void> {
   return subscribe<null>("open-settings", () => handler());
+}
+
+export function setZoom(zoom: number): Promise<Result<void>> {
+  return call<void>("set_zoom", "Could not resize the window.", { zoom });
+}
+
+/** Resolves to true while the panel extends above the pill. */
+export function setPanelOpen(open: boolean): Promise<Result<boolean>> {
+  return call<boolean>("set_panel_open", "Could not resize the window.", { open });
+}
+
+export function onTheme(handler: (theme: "light" | "dark") => void): Promise<void> {
+  return subscribe<"light" | "dark">("theme", handler);
 }

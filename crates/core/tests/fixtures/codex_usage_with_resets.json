@@ -1,0 +1,35 @@
+{
+  "user_id": "user-SYNTHETIC0002",
+  "account_id": "user-SYNTHETIC0002",
+  "plan_type": "plus",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {
+      "used_percent": 18,
+      "limit_window_seconds": 18000,
+      "reset_after_seconds": 1800,
+      "reset_at": 1794076200
+    },
+    "secondary_window": {
+      "used_percent": 40,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 410400,
+      "reset_at": 1794474000
+    }
+  },
+  "code_review_rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {
+      "used_percent": 7.5,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 496800,
+      "reset_at": 1794560400
+    },
+    "secondary_window": null
+  },
+  "rate_limit_reset_credits": {
+    "available_count": 1
+  }
+}

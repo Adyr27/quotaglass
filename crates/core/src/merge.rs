@@ -1,152 +1,224 @@
 //! Turns the latest source outcomes into one card per account.
 
 use crate::freshness::classify;
-use crate::model::{FetchError, Reading, Service, SourceKind};
+use crate::model::{AccountKey, Bucket, FetchError, Reading, Service, SourceKind};
+use crate::pace;
 use crate::provider::SourceOutcome;
 use crate::view::{AccountView, BucketView, CardState, Freshness};
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-const ANTIGRAVITY_HINT: &str =
-    "Sign in with agy, then add the account in Orca Settings > AI Provider Accounts.";
-/// Readings from two sources describe the same window when their reset times are this close.
-const SAME_RESET_MS: i64 = 60_000;
+const ANTIGRAVITY_HINT: &str = "Open Antigravity to see its limits";
+const LOGIN_EXPIRED: &str = "Login expired";
+const PROFILE_MISSING: &str = "Profile folder missing";
 
-/// Per-account choices from settings, keyed by `AccountKey::store_key()` ("claude:user@example.com").
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Overrides {
-    pub pinned: HashMap<String, SourceKind>,
-    pub disabled: HashMap<String, Vec<SourceKind>>,
+/// What a scheduler task reads: the current login of a CLI or app, an added account's profile, or neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskRole {
+    CurrentLogin,
+    AddedAccount,
+    Other,
 }
 
-/// Last successful reading per account and source. Memory only; sources refill it after a restart.
+/// One scheduler task. Its `id` is the `SourceOutcome::task_id` it produces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskMeta {
+    pub id: String,
+    pub role: TaskRole,
+}
+
+/// The user's choices and the task list that `build` applies to the cards. All keys are card IDs.
+pub struct MergeCtx<'a> {
+    pub labels: &'a BTreeMap<String, String>,
+    pub pinned: &'a [String],
+    pub hidden: &'a [String],
+    pub tasks: &'a [TaskMeta],
+}
+
+impl MergeCtx<'_> {
+    fn role(&self, task_id: &str) -> TaskRole {
+        self.tasks
+            .iter()
+            .find(|t| t.id == task_id)
+            .map_or(TaskRole::Other, |t| t.role)
+    }
+}
+
+/// Last successful reading per account, then per (source kind, task). Memory only; tasks refill it after a restart.
+/// The inner order is the source priority: `SourceKind` (Direct, AntigravityApp), then task ID.
 #[derive(Debug, Default)]
-pub struct LastReadings(HashMap<String, BTreeMap<SourceKind, Reading>>);
+pub struct LastReadings(HashMap<String, BTreeMap<(SourceKind, String), Reading>>);
 
 impl LastReadings {
-    /// Drops every stored reading from a source that is gone (no longer detected or turned off), so its old
-    /// numbers do not stay on screen. `service` limits it to one service for a single-service source.
-    pub fn forget(&mut self, kind: SourceKind, service: Option<Service>) {
-        for per_source in self.0.values_mut() {
-            per_source.retain(|k, r| *k != kind || service.is_some_and(|s| s != r.key.service));
+    /// Drops every stored reading of a task that is gone (no longer detected, or removed), so its old numbers do not
+    /// stay on screen. Returns true when it dropped something.
+    pub fn forget(&mut self, task_id: &str) -> bool {
+        let mut dropped = false;
+        for per_task in self.0.values_mut() {
+            per_task.retain(|(_, t), _| {
+                let keep = t != task_id;
+                dropped |= !keep;
+                keep
+            });
         }
         self.0.retain(|_, m| !m.is_empty());
+        dropped
+    }
+
+    /// The card ID of a stored reading of this task, if any. The lowest ID wins, so the answer is stable.
+    fn key_of(&self, task_id: &str) -> Option<String> {
+        self.0
+            .iter()
+            .filter(|(_, per_task)| per_task.keys().any(|(_, t)| t == task_id))
+            .map(|(id, _)| id)
+            .min()
+            .cloned()
     }
 }
 
 pub fn build(
     outcomes: &[SourceOutcome],
     last: &mut LastReadings,
-    overrides: &Overrides,
-    connectable: &[Service],
+    ctx: &MergeCtx,
     refresh_secs: u64,
     now_ms: i64,
 ) -> Vec<AccountView> {
-    // Two Direct providers share a kind, so a success only covers its own service.
-    let succeeded = |kind: SourceKind, service: Service| {
-        outcomes
-            .iter()
-            .any(|o| o.result.is_ok() && o.kind == kind && o.service.is_none_or(|s| s == service))
-    };
-
-    // 1. Forget accounts that a successful source no longer reports (signed out).
-    for per_source in last.0.values_mut() {
-        per_source.retain(|kind, r| !succeeded(*kind, r.key.service));
+    // 1. Forget accounts that a task which answered no longer reports (signed out). Only that task's readings go:
+    //    other logins of the same service are separate tasks.
+    let succeeded: HashSet<&str> = outcomes
+        .iter()
+        .filter(|o| o.result.is_ok())
+        .map(|o| o.task_id.as_str())
+        .collect();
+    for per_task in last.0.values_mut() {
+        per_task.retain(|(_, t), _| !succeeded.contains(t.as_str()));
     }
     // 2. Store everything that just arrived.
-    let mut live: HashMap<String, Vec<SourceKind>> = HashMap::new();
+    let mut live: HashSet<(String, SourceKind, String)> = HashSet::new();
     for o in outcomes {
         if let Ok(readings) = &o.result {
             for r in readings {
                 let id = r.key.store_key();
-                live.entry(id.clone()).or_default().push(r.source);
-                last.0.entry(id).or_default().insert(r.source, r.clone());
+                live.insert((id.clone(), r.source, o.task_id.clone()));
+                last.0
+                    .entry(id)
+                    .or_default()
+                    .insert((r.source, o.task_id.clone()), r.clone());
             }
         }
     }
     last.0.retain(|_, m| !m.is_empty());
 
     let mut cards: Vec<AccountView> = Vec::new();
-    for (id, per_source) in &last.0 {
-        let disabled = overrides.disabled.get(id).map(Vec::as_slice).unwrap_or(&[]);
-        // A pin to a source that no longer knows this account is ignored; otherwise the card (and the only way
-        // to clear the pin) would disappear.
-        let pinned = overrides
-            .pinned
-            .get(id)
-            .copied()
-            .filter(|p| per_source.contains_key(p));
-        let allowed = |k: &SourceKind| !disabled.contains(k) && pinned.is_none_or(|p| p == *k);
-        let live_here = live.get(id).map(Vec::as_slice).unwrap_or(&[]);
-
-        // A source that answered this cycle wins over stored readings. Among them, one with numbers beats one
-        // without (Orca can list an account it has no limits for), then source priority decides. `min_by_key`
-        // keeps the first of equal keys, and the map iterates in priority order.
-        let chosen = per_source
+    let mut covered: HashSet<&str> = HashSet::new();
+    for (id, per_task) in &last.0 {
+        // A task that answered this cycle wins over stored readings. Among them, one with numbers beats one without.
+        // Otherwise the map order breaks the tie: `min_by_key`
+        // keeps the first of equal keys.
+        let chosen = per_task
             .iter()
-            .filter(|(k, _)| allowed(k) && live_here.contains(k))
-            .map(|(_, r)| r)
-            .min_by_key(|r| r.buckets.is_empty())
-            .map(|r| (r, true))
+            .filter(|((kind, task), _)| live.contains(&(id.clone(), *kind, task.clone())))
+            .min_by_key(|(_, r)| r.buckets.is_empty())
+            .map(|(k, r)| (k, r, true))
             .or_else(|| {
-                per_source
+                per_task
                     .iter()
-                    .filter(|(k, _)| allowed(k))
-                    .map(|(_, r)| r)
-                    .max_by_key(|r| (!r.buckets.is_empty(), r.observed_at_ms))
-                    .map(|r| (r, false))
+                    .max_by_key(|(_, r)| (!r.buckets.is_empty(), r.observed_at_ms))
+                    .map(|(k, r)| (k, r, false))
             });
-        let Some((reading, fresh)) = chosen else {
+        let Some(((kind, task), reading, fresh)) = chosen else {
             continue;
         };
 
-        let mut reading = reading.clone();
-        if reading.source == SourceKind::Orca {
-            if let Some(direct) = per_source.get(&SourceKind::Direct) {
-                adopt_vendor_windows(&mut reading, direct);
-            }
-        }
-        let failure = (!fresh)
-            .then(|| latest_error(outcomes, reading.source, reading.key.service))
-            .flatten();
-        let mut view = card(&reading, failure, connectable, refresh_secs, now_ms);
-        view.sources = per_source.keys().copied().collect();
+        let failure = (!fresh).then(|| latest_error(outcomes, task)).flatten();
+        let mut view = card(reading, *kind, failure, refresh_secs, now_ms);
+        let tasks = per_task.keys().map(|(_, t)| t.as_str());
+        view.current_login = tasks.clone().any(|t| ctx.role(t) == TaskRole::CurrentLogin);
+        view.profile_id = tasks
+            .clone()
+            .find(|t| ctx.role(t) == TaskRole::AddedAccount)
+            .map(str::to_string);
+        covered.extend(tasks);
         cards.push(view);
     }
 
-    // 3. A single-service source failed and nothing else knows that service: show why.
+    // 3. A task failed and no card shows its reading: show why. A single-account task (Claude, Codex) always gets its
+    //    own card; a multi-account task (Antigravity) only when nothing else knows that service.
     for o in outcomes {
         let (Some(service), Err(e)) = (o.service, &o.result) else {
             continue;
         };
         if matches!(e, FetchError::NotDetected | FetchError::Disabled)
-            || cards.iter().any(|c| c.service == service)
+            || covered.contains(o.task_id.as_str())
+            || (o.kind != SourceKind::Direct && cards.iter().any(|c| c.service == service))
         {
             continue;
         }
+        let (state, reason) = failure_state(o.kind, e).unwrap_or((CardState::NoSource, e.reason()));
+        let role = ctx.role(&o.task_id);
+        // Reuse the card ID of a stored reading of this task, so labels, pins and hidden carry over. A task with a
+        // stored reading is normally `covered` above; this keeps the ID right if that ever changes.
+        let id = last
+            .key_of(&o.task_id)
+            .unwrap_or_else(|| AccountKey::new(service, None, o.task_id.as_str()).store_key());
         cards.push(AccountView {
-            id: format!("{}:{:?}-error", service.as_str(), o.kind).to_lowercase(),
+            id,
             service,
-            label: format!("{} (CLI login)", display_name(service)),
+            label: display_name(service).to_string(),
             plan: None,
             source: Some(o.kind),
-            sources: vec![],
             freshness: Freshness::Stale,
             age_secs: None,
             headline: None,
-            extra_buckets: 0,
             buckets: vec![],
-            state: CardState::NoSource,
-            reason: Some(e.reason()),
-            connect: connectable.contains(&service).then_some(service),
+            state,
+            reason: Some(reason),
+            room_left: None,
+            best_now: false,
+            banked_resets: None,
+            profile_id: (role == TaskRole::AddedAccount).then(|| o.task_id.clone()),
+            current_login: role == TaskRole::CurrentLogin,
+            pinned: false,
+            hidden: false,
         });
     }
 
+    // 4. The user's choices.
+    for c in &mut cards {
+        if let Some(label) = ctx.labels.get(&c.id) {
+            c.label = label.clone();
+        }
+        c.pinned = ctx.pinned.contains(&c.id);
+        c.hidden = ctx.hidden.contains(&c.id);
+    }
+
+    // 5. Best now, among the accounts the user can switch to.
+    let rooms: Vec<(Option<f64>, Option<i64>)> = cards
+        .iter()
+        .map(|c| {
+            let usable = !c.hidden
+                && !matches!(c.state, CardState::LoginExpired | CardState::ProfileMissing)
+                && !c.buckets.is_empty();
+            // A bucket whose reset has passed no longer holds, so its reset does not break a tie.
+            let reset = c
+                .buckets
+                .iter()
+                .filter(|b| b.freshness != Freshness::Stale)
+                .filter_map(|b| b.resets_at_ms)
+                .min();
+            (c.room_left.filter(|_| usable), reset)
+        })
+        .collect();
+    if let Some(best) = pace::best_now(&rooms) {
+        cards[best].best_now = true;
+    }
+
+    // 6. A fixed order: service, the current login first, label, then ID (unique) so equal labels never swap.
     cards.sort_by(|a, b| {
         a.service
             .cmp(&b.service)
+            .then_with(|| b.current_login.cmp(&a.current_login))
             .then_with(|| a.label.cmp(&b.label))
+            .then_with(|| a.id.cmp(&b.id))
     });
     cards
 }
@@ -159,53 +231,47 @@ fn display_name(s: Service) -> &'static str {
     }
 }
 
-fn latest_error(
-    outcomes: &[SourceOutcome],
-    kind: SourceKind,
-    service: Service,
-) -> Option<FetchError> {
+/// The latest error of one task, if its last attempt failed.
+fn latest_error(outcomes: &[SourceOutcome], task_id: &str) -> Option<FetchError> {
     outcomes
         .iter()
-        .filter(|o| o.kind == kind && o.service.is_none_or(|s| s == service))
+        .filter(|o| o.task_id == task_id)
         .find_map(|o| o.result.as_ref().err().cloned())
 }
 
-/// Orca's window lengths can be wrong (it labels Codex Free's 30-day window as 5 h).
-/// A Direct bucket with the same reset time is the vendor's own answer, for both the length and the name.
-fn adopt_vendor_windows(reading: &mut Reading, direct: &Reading) {
-    for b in &mut reading.buckets {
-        let Some(reset) = b.resets_at_ms else {
-            continue;
-        };
-        if let Some(d) = direct.buckets.iter().find(|d| {
-            d.resets_at_ms
-                .is_some_and(|r| (r - reset).abs() <= SAME_RESET_MS)
-        }) {
-            if d.window_secs.is_some() {
-                b.window_secs = d.window_secs;
-                b.name = d.name.clone();
-            }
+/// The states with their own wording. An expired login only counts for a single-account source.
+fn failure_state(kind: SourceKind, e: &FetchError) -> Option<(CardState, String)> {
+    match e {
+        FetchError::Expired if kind == SourceKind::Direct => {
+            Some((CardState::LoginExpired, LOGIN_EXPIRED.into()))
         }
+        FetchError::ProfileMissing => Some((CardState::ProfileMissing, PROFILE_MISSING.into())),
+        _ => None,
     }
 }
 
 fn card(
     r: &Reading,
+    kind: SourceKind,
     failure: Option<FetchError>,
-    connectable: &[Service],
     refresh_secs: u64,
     now_ms: i64,
 ) -> AccountView {
     let buckets: Vec<BucketView> = r
         .buckets
         .iter()
-        .map(|b| BucketView {
-            name: b.name.clone(),
-            used_percent: b.used_percent,
-            window_secs: b.window_secs,
-            resets_at_ms: b.resets_at_ms,
-            limit_reached: b.used_percent >= 100.0,
-            freshness: classify(r.observed_at_ms, refresh_secs, b, now_ms),
+        .map(|b| {
+            let passed = pace::passed_percent(b, now_ms);
+            BucketView {
+                name: b.name.clone(),
+                used_percent: b.used_percent,
+                window_secs: b.window_secs,
+                resets_at_ms: b.resets_at_ms,
+                limit_reached: b.used_percent >= 100.0,
+                freshness: classify(r.observed_at_ms, refresh_secs, b, now_ms),
+                passed_percent: passed,
+                fast_burn: pace::fast_burn(b.used_percent, passed),
+            }
         })
         .collect();
     // The tightest bucket that is still current. A bucket whose reset has passed only leads when all have.
@@ -217,36 +283,44 @@ fn card(
             .cloned()
     };
     let headline = tightest(true).or_else(|| tightest(false));
+    // Room left counts only the limits that still hold.
+    let current: Vec<Bucket> = r
+        .buckets
+        .iter()
+        .zip(&buckets)
+        .filter(|(_, v)| v.freshness != Freshness::Stale)
+        .map(|(b, _)| b.clone())
+        .collect();
     let (state, reason) = match (&failure, buckets.is_empty()) {
-        (Some(e), _) => (CardState::Error, Some(e.reason())),
+        (Some(e), _) => failure_state(kind, e).unwrap_or((CardState::Error, e.reason())),
         (None, true) if r.key.service == Service::Antigravity => {
-            (CardState::NoReadingYet, Some(ANTIGRAVITY_HINT.into()))
+            (CardState::NoReadingYet, ANTIGRAVITY_HINT.into())
         }
-        (None, true) => (CardState::NoReadingYet, None),
-        (None, false) => (CardState::Ok, None),
+        (None, true) => (CardState::NoReadingYet, String::new()),
+        (None, false) => (CardState::Ok, String::new()),
     };
-    let connect = (failure.is_some()
-        && r.key.service != Service::Antigravity
-        && connectable.contains(&r.key.service))
-    .then_some(r.key.service);
     AccountView {
         id: r.key.store_key(),
         service: r.key.service,
         label: r.label.clone(),
         plan: r.plan.clone(),
         source: Some(r.source),
-        sources: vec![],
         freshness: headline
             .as_ref()
             .map(|h| h.freshness)
             .unwrap_or(Freshness::Stale),
         age_secs: Some((now_ms.saturating_sub(r.observed_at_ms).max(0) / 1000) as u64),
-        extra_buckets: buckets.len().saturating_sub(1) as u32,
         headline,
         buckets,
         state,
-        reason,
-        connect,
+        reason: (!reason.is_empty()).then_some(reason),
+        room_left: pace::room_left(&current),
+        best_now: false,
+        banked_resets: r.banked_resets,
+        profile_id: None,
+        current_login: false,
+        pinned: false,
+        hidden: false,
     }
 }
 
@@ -256,6 +330,23 @@ mod tests {
     use crate::model::{AccountKey, Bucket};
 
     const NOW: i64 = 1_800_000_000_000;
+    const FIVE_H: u64 = 18_000;
+
+    fn tasks() -> Vec<TaskMeta> {
+        [
+            ("claude-current", TaskRole::CurrentLogin),
+            ("codex-current", TaskRole::CurrentLogin),
+            ("antigravity-app", TaskRole::CurrentLogin),
+            ("p1", TaskRole::AddedAccount),
+            ("p2", TaskRole::AddedAccount),
+        ]
+        .into_iter()
+        .map(|(id, role)| TaskMeta {
+            id: id.into(),
+            role,
+        })
+        .collect()
+    }
 
     fn reading(
         service: Service,
@@ -266,7 +357,7 @@ mod tests {
     ) -> Reading {
         Reading {
             key: AccountKey::new(service, email, local),
-            label: email.unwrap_or(local).to_string(),
+            label: display_name(service).to_string(),
             plan: None,
             buckets: pcts
                 .iter()
@@ -274,197 +365,97 @@ mod tests {
                 .map(|(i, p)| Bucket {
                     name: format!("b{i}"),
                     used_percent: *p,
-                    window_secs: Some(18_000),
+                    window_secs: Some(FIVE_H),
                     resets_at_ms: Some(NOW + 3_600_000),
                 })
                 .collect(),
             source,
             observed_at_ms: NOW,
+            banked_resets: None,
         }
     }
 
-    fn ok(kind: SourceKind, rs: Vec<Reading>) -> SourceOutcome {
+    fn service_of(kind: SourceKind, rs: &[Reading]) -> Option<Service> {
+        match kind {
+            SourceKind::Direct => rs.first().map(|r| r.key.service),
+            _ => Some(Service::Antigravity),
+        }
+    }
+
+    fn ok(task: &str, kind: SourceKind, rs: Vec<Reading>) -> SourceOutcome {
         SourceOutcome {
+            task_id: task.into(),
             kind,
-            service: None,
+            service: service_of(kind, &rs),
             attempted_at_ms: NOW,
             result: Ok(rs),
         }
     }
 
-    fn err(kind: SourceKind, service: Option<Service>, e: FetchError) -> SourceOutcome {
+    fn err(task: &str, kind: SourceKind, service: Service, e: FetchError) -> SourceOutcome {
         SourceOutcome {
+            task_id: task.into(),
             kind,
-            service,
+            service: Some(service),
             attempted_at_ms: NOW,
             result: Err(e),
         }
     }
 
-    fn run(
+    struct Prefs {
+        labels: BTreeMap<String, String>,
+        pinned: Vec<String>,
+        hidden: Vec<String>,
+    }
+
+    impl Prefs {
+        fn none() -> Self {
+            Self {
+                labels: BTreeMap::new(),
+                pinned: vec![],
+                hidden: vec![],
+            }
+        }
+    }
+
+    fn run_with(
         outcomes: &[SourceOutcome],
         last: &mut LastReadings,
-        ov: &Overrides,
+        prefs: &Prefs,
     ) -> Vec<AccountView> {
-        build(
-            outcomes,
-            last,
-            ov,
-            &[Service::Claude, Service::Codex],
-            120,
-            NOW,
+        let tasks = tasks();
+        let ctx = MergeCtx {
+            labels: &prefs.labels,
+            pinned: &prefs.pinned,
+            hidden: &prefs.hidden,
+            tasks: &tasks,
+        };
+        build(outcomes, last, &ctx, 120, NOW)
+    }
+
+    fn run(outcomes: &[SourceOutcome], last: &mut LastReadings) -> Vec<AccountView> {
+        run_with(outcomes, last, &Prefs::none())
+    }
+
+    fn claude(task: &str, email: &str, pct: f64) -> SourceOutcome {
+        ok(
+            task,
+            SourceKind::Direct,
+            vec![reading(
+                Service::Claude,
+                Some(email),
+                task,
+                SourceKind::Direct,
+                &[pct],
+            )],
         )
     }
 
+    fn id_of(service: Service, email: &str) -> String {
+        AccountKey::new(service, Some(email), "x").store_key()
+    }
+
     const E: Option<&str> = Some("user@example.com");
-
-    #[test]
-    fn direct_beats_orca_when_both_succeed() {
-        let mut last = LastReadings::default();
-        let cards = run(
-            &[
-                ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Claude, E, "o", SourceKind::Orca, &[50.0])],
-                ),
-                ok(
-                    SourceKind::Direct,
-                    vec![reading(
-                        Service::Claude,
-                        E,
-                        "d",
-                        SourceKind::Direct,
-                        &[10.0],
-                    )],
-                ),
-            ],
-            &mut last,
-            &Overrides::default(),
-        );
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::Direct));
-        assert_eq!(cards[0].headline.as_ref().unwrap().used_percent, 10.0);
-    }
-
-    #[test]
-    fn orca_used_when_direct_fails_this_cycle() {
-        let mut last = LastReadings::default();
-        run(
-            &[ok(
-                SourceKind::Direct,
-                vec![reading(
-                    Service::Claude,
-                    E,
-                    "d",
-                    SourceKind::Direct,
-                    &[10.0],
-                )],
-            )],
-            &mut last,
-            &Overrides::default(),
-        );
-        let cards = run(
-            &[
-                err(
-                    SourceKind::Direct,
-                    Some(Service::Claude),
-                    FetchError::Timeout,
-                ),
-                ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Claude, E, "o", SourceKind::Orca, &[50.0])],
-                ),
-            ],
-            &mut last,
-            &Overrides::default(),
-        );
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::Orca));
-        assert_eq!(cards[0].state, CardState::Ok);
-    }
-
-    #[test]
-    fn pinned_source_overrides_priority() {
-        let mut last = LastReadings::default();
-        let mut ov = Overrides::default();
-        ov.pinned
-            .insert("claude:user@example.com".into(), SourceKind::Orca);
-        let cards = run(
-            &[
-                ok(
-                    SourceKind::Direct,
-                    vec![reading(
-                        Service::Claude,
-                        E,
-                        "d",
-                        SourceKind::Direct,
-                        &[10.0],
-                    )],
-                ),
-                ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Claude, E, "o", SourceKind::Orca, &[50.0])],
-                ),
-            ],
-            &mut last,
-            &ov,
-        );
-        assert_eq!(cards[0].source, Some(SourceKind::Orca));
-        assert_eq!(cards[0].sources, vec![SourceKind::Direct, SourceKind::Orca]);
-    }
-
-    #[test]
-    fn pin_to_a_source_without_this_account_is_ignored() {
-        let mut last = LastReadings::default();
-        let mut ov = Overrides::default();
-        ov.pinned
-            .insert("claude:user@example.com".into(), SourceKind::Omp);
-        let cards = run(
-            &[ok(
-                SourceKind::Direct,
-                vec![reading(
-                    Service::Claude,
-                    E,
-                    "d",
-                    SourceKind::Direct,
-                    &[10.0],
-                )],
-            )],
-            &mut last,
-            &ov,
-        );
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::Direct));
-    }
-
-    #[test]
-    fn disabled_source_ignored() {
-        let mut last = LastReadings::default();
-        let mut ov = Overrides::default();
-        ov.disabled
-            .insert("claude:user@example.com".into(), vec![SourceKind::Direct]);
-        let cards = run(
-            &[
-                ok(
-                    SourceKind::Direct,
-                    vec![reading(
-                        Service::Claude,
-                        E,
-                        "d",
-                        SourceKind::Direct,
-                        &[10.0],
-                    )],
-                ),
-                ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Claude, E, "o", SourceKind::Orca, &[50.0])],
-                ),
-            ],
-            &mut last,
-            &ov,
-        );
-        assert_eq!(cards[0].source, Some(SourceKind::Orca));
-    }
 
     #[test]
     fn email_less_readings_never_merged() {
@@ -472,169 +463,162 @@ mod tests {
         let cards = run(
             &[
                 ok(
+                    "claude-current",
                     SourceKind::Direct,
                     vec![reading(
                         Service::Claude,
                         None,
-                        "claude-direct",
+                        "claude-current",
                         SourceKind::Direct,
                         &[10.0],
                     )],
                 ),
                 ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Claude, E, "o", SourceKind::Orca, &[50.0])],
+                    "p1",
+                    SourceKind::Direct,
+                    vec![reading(
+                        Service::Claude,
+                        E,
+                        "p1",
+                        SourceKind::Direct,
+                        &[50.0],
+                    )],
                 ),
             ],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards.len(), 2);
     }
-
     #[test]
-    fn emails_merge_case_insensitive() {
+    fn one_task_success_keeps_other_task_readings() {
         let mut last = LastReadings::default();
-        let cards = run(
-            &[
-                ok(
-                    SourceKind::Direct,
-                    vec![reading(
-                        Service::Codex,
-                        Some("User@Example.com"),
-                        "d",
-                        SourceKind::Direct,
-                        &[10.0],
-                    )],
-                ),
-                ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Codex, E, "o", SourceKind::Orca, &[50.0])],
-                ),
-            ],
-            &mut last,
-            &Overrides::default(),
-        );
-        assert_eq!(cards.len(), 1);
-    }
-
-    #[test]
-    fn vendor_window_wins() {
-        let mut last = LastReadings::default();
-        let mut direct = reading(Service::Codex, E, "d", SourceKind::Direct, &[52.0]);
-        direct.buckets[0].window_secs = Some(2_592_000);
-        direct.buckets[0].name = "30 days".into();
         run(
-            &[ok(SourceKind::Direct, vec![direct])],
-            &mut last,
-            &Overrides::default(),
-        );
-        let cards = run(
             &[
-                err(
-                    SourceKind::Direct,
-                    Some(Service::Codex),
-                    FetchError::Timeout,
-                ),
-                ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Codex, E, "o", SourceKind::Orca, &[52.0])],
-                ),
+                claude("claude-current", "a@example.com", 10.0),
+                claude("p1", "b@example.com", 20.0),
             ],
             &mut last,
-            &Overrides::default(),
         );
-        assert_eq!(cards[0].source, Some(SourceKind::Orca));
-        assert_eq!(cards[0].buckets[0].window_secs, Some(2_592_000));
-        assert_eq!(cards[0].buckets[0].name, "30 days");
+        // Only the current login answered this cycle; the profile's reading must stay.
+        let cards = run(
+            &[claude("claude-current", "a@example.com", 11.0)],
+            &mut last,
+        );
+        assert_eq!(cards.len(), 2);
+        let profile = cards
+            .iter()
+            .find(|c| c.id == id_of(Service::Claude, "b@example.com"))
+            .unwrap();
+        assert_eq!(profile.profile_id.as_deref(), Some("p1"));
+        assert!(!profile.current_login);
     }
 
     #[test]
-    fn headline_is_tightest_and_extra_count() {
+    fn headline_is_tightest() {
         let mut last = LastReadings::default();
         let cards = run(
             &[ok(
-                SourceKind::Orca,
+                "antigravity-app",
+                SourceKind::AntigravityApp,
                 vec![reading(
                     Service::Antigravity,
                     E,
-                    "o",
-                    SourceKind::Orca,
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
                     &[10.0, 100.0, 15.0],
                 )],
             )],
             &mut last,
-            &Overrides::default(),
         );
         let h = cards[0].headline.as_ref().unwrap();
         assert_eq!(h.used_percent, 100.0);
         assert!(h.limit_reached);
-        assert_eq!(cards[0].extra_buckets, 2);
+        assert_eq!(cards[0].room_left, Some(0.0));
     }
 
     #[test]
     fn headline_skips_a_bucket_whose_reset_passed() {
         let mut last = LastReadings::default();
-        let mut r = reading(Service::Claude, E, "d", SourceKind::Direct, &[90.0, 20.0]);
+        let mut r = reading(
+            Service::Claude,
+            E,
+            "claude-current",
+            SourceKind::Direct,
+            &[90.0, 20.0],
+        );
         r.buckets[0].resets_at_ms = Some(NOW - 1);
         let cards = run(
-            &[ok(SourceKind::Direct, vec![r])],
+            &[ok("claude-current", SourceKind::Direct, vec![r])],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards[0].headline.as_ref().unwrap().used_percent, 20.0);
         assert_eq!(cards[0].freshness, Freshness::Live);
+        assert_eq!(
+            cards[0].room_left,
+            Some(80.0),
+            "a stale bucket gives no room"
+        );
     }
 
     #[test]
-    fn reading_with_numbers_beats_higher_priority_empty_one() {
+    fn reading_with_numbers_beats_empty_one() {
         let mut last = LastReadings::default();
         let cards = run(
             &[
                 ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Antigravity, E, "o", SourceKind::Orca, &[])],
+                    "claude-current",
+                    SourceKind::Direct,
+                    vec![reading(
+                        Service::Claude,
+                        E,
+                        "claude-current",
+                        SourceKind::Direct,
+                        &[],
+                    )],
                 ),
                 ok(
-                    SourceKind::Omp,
+                    "p1",
+                    SourceKind::Direct,
                     vec![reading(
-                        Service::Antigravity,
+                        Service::Claude,
                         E,
-                        "m",
-                        SourceKind::Omp,
+                        "p1",
+                        SourceKind::Direct,
                         &[40.0],
                     )],
                 ),
             ],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::Omp));
+        assert_eq!(cards[0].headline.as_ref().unwrap().used_percent, 40.0);
         assert_eq!(cards[0].state, CardState::Ok);
     }
-
     #[test]
-    fn forget_drops_only_that_source() {
+    fn forget_drops_only_that_task() {
         let mut last = LastReadings::default();
         run(
             &[
                 ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Codex, E, "o", SourceKind::Orca, &[5.0])],
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
+                    vec![reading(
+                        Service::Antigravity,
+                        E,
+                        "antigravity-app",
+                        SourceKind::AntigravityApp,
+                        &[5.0],
+                    )],
                 ),
-                ok(
-                    SourceKind::Omp,
-                    vec![reading(Service::Claude, E, "m", SourceKind::Omp, &[7.0])],
-                ),
+                claude("claude-current", "a@example.com", 7.0),
             ],
             &mut last,
-            &Overrides::default(),
         );
-        last.forget(SourceKind::Orca, None);
-        let cards = run(&[], &mut last, &Overrides::default());
+        assert!(last.forget("antigravity-app"));
+        assert!(!last.forget("antigravity-app"), "nothing left to drop");
+        let cards = run(&[], &mut last);
         assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::Omp));
+        assert_eq!(cards[0].service, Service::Claude);
     }
 
     #[test]
@@ -642,22 +626,26 @@ mod tests {
         let mut last = LastReadings::default();
         run(
             &[ok(
-                SourceKind::Orca,
+                "antigravity-app",
+                SourceKind::AntigravityApp,
                 vec![reading(
                     Service::Antigravity,
                     E,
-                    "o",
-                    SourceKind::Orca,
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
                     &[20.0],
                 )],
             )],
             &mut last,
-            &Overrides::default(),
         );
         let cards = run(
-            &[err(SourceKind::Orca, None, FetchError::Timeout)],
+            &[err(
+                "antigravity-app",
+                SourceKind::AntigravityApp,
+                Service::Antigravity,
+                FetchError::Timeout,
+            )],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].state, CardState::Error);
@@ -665,7 +653,6 @@ mod tests {
             cards[0].reason.as_deref(),
             Some(FetchError::Timeout.reason().as_str())
         );
-        assert_eq!(cards[0].connect, None);
     }
 
     #[test]
@@ -673,22 +660,21 @@ mod tests {
         let mut last = LastReadings::default();
         run(
             &[ok(
-                SourceKind::Orca,
+                "antigravity-app",
+                SourceKind::AntigravityApp,
                 vec![reading(
                     Service::Antigravity,
                     E,
-                    "o",
-                    SourceKind::Orca,
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
                     &[20.0],
                 )],
             )],
             &mut last,
-            &Overrides::default(),
         );
         let cards = run(
-            &[ok(SourceKind::Orca, vec![])],
+            &[ok("antigravity-app", SourceKind::AntigravityApp, vec![])],
             &mut last,
-            &Overrides::default(),
         );
         assert!(cards.is_empty());
     }
@@ -698,47 +684,419 @@ mod tests {
         let mut last = LastReadings::default();
         let cards = run(
             &[ok(
-                SourceKind::Orca,
-                vec![reading(Service::Antigravity, E, "o", SourceKind::Orca, &[])],
+                "antigravity-app",
+                SourceKind::AntigravityApp,
+                vec![reading(
+                    Service::Antigravity,
+                    E,
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
+                    &[],
+                )],
             )],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards[0].state, CardState::NoReadingYet);
-        assert_eq!(cards[0].reason.as_deref(), Some(ANTIGRAVITY_HINT));
+        assert_eq!(
+            cards[0].reason.as_deref(),
+            Some("Open Antigravity to see its limits")
+        );
         assert!(cards[0].headline.is_none());
+        assert_eq!(cards[0].room_left, None);
     }
 
     #[test]
-    fn expired_direct_with_no_other_source_shows_sign_in_card() {
+    fn expired_login_state() {
         let mut last = LastReadings::default();
         let cards = run(
+            &[
+                claude("p1", "b@example.com", 20.0),
+                err(
+                    "claude-current",
+                    SourceKind::Direct,
+                    Service::Claude,
+                    FetchError::Expired,
+                ),
+            ],
+            &mut last,
+        );
+        assert_eq!(
+            cards.len(),
+            2,
+            "another Claude card does not hide the expired one"
+        );
+        let expired = cards
+            .iter()
+            .find(|c| c.state == CardState::LoginExpired)
+            .unwrap();
+        assert_eq!(expired.id, "claude:claude-current");
+        assert_eq!(expired.label, "Claude");
+        assert_eq!(expired.reason.as_deref(), Some("Login expired"));
+        assert!(expired.current_login);
+        assert_eq!(expired.room_left, None);
+
+        // A stored reading whose login then expires keeps its numbers but changes state.
+        let cards = run(
             &[err(
+                "p1",
                 SourceKind::Direct,
-                Some(Service::Claude),
+                Service::Claude,
                 FetchError::Expired,
             )],
             &mut last,
-            &Overrides::default(),
         );
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].state, CardState::NoSource);
-        assert_eq!(cards[0].connect, Some(Service::Claude));
-        assert_eq!(cards[0].reason, Some(FetchError::Expired.reason()));
+        let profile = cards
+            .iter()
+            .find(|c| c.id == id_of(Service::Claude, "b@example.com"))
+            .unwrap();
+        assert_eq!(profile.state, CardState::LoginExpired);
+        assert_eq!(profile.reason.as_deref(), Some("Login expired"));
+        assert_eq!(profile.profile_id.as_deref(), Some("p1"));
     }
 
     #[test]
-    fn not_detected_direct_adds_no_card() {
+    fn profile_missing_state() {
         let mut last = LastReadings::default();
         let cards = run(
             &[err(
+                "p2",
                 SourceKind::Direct,
-                Some(Service::Codex),
+                Service::Codex,
+                FetchError::ProfileMissing,
+            )],
+            &mut last,
+        );
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].state, CardState::ProfileMissing);
+        assert_eq!(cards[0].id, "codex:p2");
+        assert_eq!(cards[0].label, "Codex");
+        assert_eq!(cards[0].reason.as_deref(), Some("Profile folder missing"));
+        assert_eq!(cards[0].profile_id.as_deref(), Some("p2"));
+        assert!(!cards[0].current_login);
+    }
+
+    #[test]
+    fn not_detected_adds_no_card() {
+        let mut last = LastReadings::default();
+        let cards = run(
+            &[err(
+                "codex-current",
+                SourceKind::Direct,
+                Service::Codex,
                 FetchError::NotDetected,
             )],
             &mut last,
-            &Overrides::default(),
         );
         assert!(cards.is_empty());
+    }
+
+    #[test]
+    fn fast_burn_flag_in_view() {
+        let mut last = LastReadings::default();
+        let mut r = reading(
+            Service::Claude,
+            E,
+            "claude-current",
+            SourceKind::Direct,
+            &[62.0, 44.0],
+        );
+        // 30 % of a 5 h window has passed: the reset is 70 % of the window away.
+        for b in &mut r.buckets {
+            b.resets_at_ms = Some(NOW + 12_600_000);
+        }
+        let cards = run(
+            &[ok("claude-current", SourceKind::Direct, vec![r])],
+            &mut last,
+        );
+        let b = &cards[0].buckets;
+        assert!((b[0].passed_percent.unwrap() - 30.0).abs() < 1e-9);
+        assert!(b[0].fast_burn);
+        assert!(!b[1].fast_burn);
+        assert!(cards[0].headline.as_ref().unwrap().fast_burn);
+    }
+
+    #[test]
+    fn best_now_skips_hidden_and_expired() {
+        let mut last = LastReadings::default();
+        let mut prefs = Prefs::none();
+        prefs.hidden = vec![id_of(Service::Claude, "a@example.com")];
+        let all = [
+            claude("claude-current", "a@example.com", 10.0),
+            claude("p1", "b@example.com", 20.0),
+            claude("p2", "c@example.com", 50.0),
+            ok(
+                "codex-current",
+                SourceKind::Direct,
+                vec![reading(
+                    Service::Codex,
+                    Some("d@example.com"),
+                    "codex-current",
+                    SourceKind::Direct,
+                    &[60.0],
+                )],
+            ),
+        ];
+        run_with(&all, &mut last, &prefs);
+        let cards = run_with(
+            &[
+                all[0].clone(),
+                err(
+                    "p1",
+                    SourceKind::Direct,
+                    Service::Claude,
+                    FetchError::Expired,
+                ),
+                all[2].clone(),
+                all[3].clone(),
+            ],
+            &mut last,
+            &prefs,
+        );
+        let best: Vec<&str> = cards
+            .iter()
+            .filter(|c| c.best_now)
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(best, [id_of(Service::Claude, "c@example.com").as_str()]);
+    }
+
+    #[test]
+    fn best_now_tie_break_ignores_stale_resets() {
+        let mut last = LastReadings::default();
+        // Same room (80) on both. A's earliest reset is on a bucket whose reset passed, so it must not count.
+        let mut a = reading(
+            Service::Claude,
+            Some("a@example.com"),
+            "claude-current",
+            SourceKind::Direct,
+            &[90.0, 20.0],
+        );
+        a.buckets[0].resets_at_ms = Some(NOW - 1);
+        a.buckets[1].resets_at_ms = Some(NOW + 7_200_000);
+        let mut b = reading(
+            Service::Claude,
+            Some("b@example.com"),
+            "p1",
+            SourceKind::Direct,
+            &[20.0],
+        );
+        b.buckets[0].resets_at_ms = Some(NOW + 3_600_000);
+        let cards = run(
+            &[
+                ok("claude-current", SourceKind::Direct, vec![a]),
+                ok("p1", SourceKind::Direct, vec![b]),
+            ],
+            &mut last,
+        );
+        let best: Vec<&str> = cards
+            .iter()
+            .filter(|c| c.best_now)
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(best, [id_of(Service::Claude, "b@example.com").as_str()]);
+    }
+
+    #[test]
+    fn all_stale_account_is_never_best_now() {
+        let mut last = LastReadings::default();
+        let mut a = reading(
+            Service::Claude,
+            Some("a@example.com"),
+            "claude-current",
+            SourceKind::Direct,
+            &[1.0, 2.0],
+        );
+        for bucket in &mut a.buckets {
+            bucket.resets_at_ms = Some(NOW - 1);
+        }
+        let cards = run(
+            &[
+                ok("claude-current", SourceKind::Direct, vec![a]),
+                claude("p1", "b@example.com", 50.0),
+                claude("p2", "c@example.com", 60.0),
+            ],
+            &mut last,
+        );
+        let stale = cards
+            .iter()
+            .find(|c| c.id == id_of(Service::Claude, "a@example.com"))
+            .unwrap();
+        assert!(!stale.best_now);
+        assert_eq!(stale.room_left, None);
+        let best: Vec<&str> = cards
+            .iter()
+            .filter(|c| c.best_now)
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(best, [id_of(Service::Claude, "b@example.com").as_str()]);
+    }
+
+    #[test]
+    fn hidden_current_login_stays_hidden_when_its_task_errors() {
+        let mut last = LastReadings::default();
+        let mut prefs = Prefs::none();
+        let id = id_of(Service::Claude, "a@example.com");
+        prefs.hidden = vec![id.clone()];
+        prefs.pinned = vec![id.clone()];
+        prefs.labels.insert(id.clone(), "Work".into());
+        run_with(
+            &[claude("claude-current", "a@example.com", 10.0)],
+            &mut last,
+            &prefs,
+        );
+        for e in [FetchError::Expired, FetchError::Timeout] {
+            let cards = run_with(
+                &[err(
+                    "claude-current",
+                    SourceKind::Direct,
+                    Service::Claude,
+                    e,
+                )],
+                &mut last,
+                &prefs,
+            );
+            assert_eq!(cards.len(), 1, "no second card under the task's own ID");
+            assert_eq!(cards[0].id, id);
+            assert!(cards[0].hidden && cards[0].pinned);
+            assert_eq!(cards[0].label, "Work");
+            assert_ne!(cards[0].state, CardState::Ok);
+        }
+    }
+
+    #[test]
+    fn error_card_reuses_remembered_key() {
+        let mut last = LastReadings::default();
+        let mut prefs = Prefs::none();
+        let id = id_of(Service::Claude, "a@example.com");
+        prefs.hidden = vec![id.clone()];
+        run_with(
+            &[claude("claude-current", "a@example.com", 10.0)],
+            &mut last,
+            &prefs,
+        );
+        assert_eq!(last.key_of("claude-current").as_deref(), Some(id.as_str()));
+        assert_eq!(last.key_of("p1"), None);
+        // Without a remembered key the error card falls back to the task's own ID.
+        let cards = run_with(
+            &[err(
+                "p1",
+                SourceKind::Direct,
+                Service::Claude,
+                FetchError::Expired,
+            )],
+            &mut last,
+            &prefs,
+        );
+        assert!(cards.iter().any(|c| c.id == "claude:p1" && !c.hidden));
+    }
+
+    #[test]
+    fn label_override_applied() {
+        let mut last = LastReadings::default();
+        let mut prefs = Prefs::none();
+        let id = id_of(Service::Claude, "a@example.com");
+        prefs.labels.insert(id.clone(), "Work".into());
+        let cards = run_with(
+            &[claude("claude-current", "a@example.com", 10.0)],
+            &mut last,
+            &prefs,
+        );
+        assert_eq!(cards[0].id, id);
+        assert_eq!(cards[0].label, "Work");
+    }
+
+    #[test]
+    fn pinned_and_hidden_flags() {
+        let mut last = LastReadings::default();
+        let mut prefs = Prefs::none();
+        let a = id_of(Service::Claude, "a@example.com");
+        let b = id_of(Service::Claude, "b@example.com");
+        prefs.pinned = vec![a.clone()];
+        prefs.hidden = vec![b.clone()];
+        let cards = run_with(
+            &[
+                claude("claude-current", "a@example.com", 10.0),
+                claude("p1", "b@example.com", 10.0),
+            ],
+            &mut last,
+            &prefs,
+        );
+        let find = |id: &str| cards.iter().find(|c| c.id == id).unwrap();
+        assert!(find(&a).pinned && !find(&a).hidden);
+        assert!(find(&b).hidden && !find(&b).pinned);
+    }
+
+    #[test]
+    fn cards_sorted_deterministically() {
+        let mut prefs = Prefs::none();
+        // A profile label that sorts before "Claude" still comes after the current login.
+        prefs
+            .labels
+            .insert(id_of(Service::Claude, "b@example.com"), "A team".into());
+        let outcomes = vec![
+            ok(
+                "antigravity-app",
+                SourceKind::AntigravityApp,
+                vec![reading(
+                    Service::Antigravity,
+                    Some("z@example.com"),
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
+                    &[5.0],
+                )],
+            ),
+            ok(
+                "p2",
+                SourceKind::Direct,
+                vec![reading(
+                    Service::Codex,
+                    None,
+                    "p2",
+                    SourceKind::Direct,
+                    &[5.0],
+                )],
+            ),
+            ok(
+                "p1",
+                SourceKind::Direct,
+                vec![reading(
+                    Service::Codex,
+                    None,
+                    "p1",
+                    SourceKind::Direct,
+                    &[5.0],
+                )],
+            ),
+            claude("p1", "b@example.com", 5.0),
+            claude("claude-current", "a@example.com", 5.0),
+            ok(
+                "codex-current",
+                SourceKind::Direct,
+                vec![reading(
+                    Service::Codex,
+                    None,
+                    "codex-current",
+                    SourceKind::Direct,
+                    &[5.0],
+                )],
+            ),
+        ];
+        let ids = |cards: Vec<AccountView>| cards.into_iter().map(|c| c.id).collect::<Vec<_>>();
+        let forward = ids(run_with(&outcomes, &mut LastReadings::default(), &prefs));
+        let mut reversed = outcomes.clone();
+        reversed.reverse();
+        let backward = ids(run_with(&reversed, &mut LastReadings::default(), &prefs));
+        assert_eq!(forward, backward);
+        assert_eq!(
+            forward,
+            [
+                id_of(Service::Claude, "a@example.com"),
+                id_of(Service::Claude, "b@example.com"),
+                "codex:codex-current".to_string(),
+                "codex:p1".to_string(),
+                "codex:p2".to_string(),
+                id_of(Service::Antigravity, "z@example.com"),
+            ]
+        );
     }
 }

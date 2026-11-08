@@ -67,14 +67,18 @@ fn provider_name(service: Service) -> &'static str {
 }
 
 /// The alerts due for this snapshot. Hidden accounts never alert.
-/// Keys of accounts that are gone are pruned, except entries whose window is still open:
-/// right after start not every account has a reading yet, and those must not alert again.
+/// Prunes only limits that are gone from accounts with readings in this snapshot, plus windows
+/// that ended over 7 days ago. An empty snapshot (the first publish, before any fetch) changes nothing.
 pub fn check(snapshot: &Snapshot, state: &mut WarnState) -> Vec<Alert> {
     check_at(snapshot, state, warnings::local_offset_secs())
 }
 
-fn check_at(snapshot: &Snapshot, state: &mut WarnState, offset_secs: i32) -> Vec<Alert> {
+fn check_at(snapshot: &Snapshot, state: &mut WarnState, offset_secs: Option<i32>) -> Vec<Alert> {
+    if snapshot.accounts.is_empty() {
+        return Vec::new();
+    }
     let now_ms = snapshot.generated_at_ms;
+    let mut present = BTreeSet::new();
     let mut live = BTreeSet::new();
     let mut alerts = Vec::new();
     for account in &snapshot.accounts {
@@ -94,7 +98,7 @@ fn check_at(snapshot: &Snapshot, state: &mut WarnState, offset_secs: i32) -> Vec
                         body: format!(
                             "{} at {}%{resets}",
                             bucket.name,
-                            bucket.used_percent.round()
+                            bucket.used_percent.floor()
                         ),
                         level,
                     });
@@ -102,15 +106,11 @@ fn check_at(snapshot: &Snapshot, state: &mut WarnState, offset_secs: i32) -> Vec
             }
             live.insert(key);
         }
+        if !account.buckets.is_empty() {
+            present.insert(account.id.clone());
+        }
     }
-    live.extend(
-        state
-            .0
-            .iter()
-            .filter(|(_, f)| f.reset_ms.is_some_and(|r| r > now_ms))
-            .map(|(k, _)| k.clone()),
-    );
-    warnings::prune(state, &live);
+    warnings::prune(state, &present, &live, now_ms);
     alerts
 }
 
@@ -203,7 +203,7 @@ mod tests {
             vec![bucket("5-hour", 81.4, Some(NOW + 125 * 60_000))],
         )]);
         let mut state = WarnState::default();
-        let alerts = check_at(&s, &mut state, 0);
+        let alerts = check_at(&s, &mut state, Some(0));
         assert_eq!(
             alerts,
             [Alert {
@@ -212,7 +212,7 @@ mod tests {
                 level: 80,
             }]
         );
-        assert!(check_at(&s, &mut state, 0).is_empty());
+        assert!(check_at(&s, &mut state, Some(0)).is_empty());
     }
 
     #[test]
@@ -225,18 +225,69 @@ mod tests {
         );
         a.hidden = true;
         let mut state = WarnState::default();
-        assert!(check_at(&snap(vec![a]), &mut state, 0).is_empty());
+        assert!(check_at(&snap(vec![a]), &mut state, Some(0)).is_empty());
         assert!(state.0.is_empty());
     }
 
     #[test]
-    fn check_prunes_gone_accounts_but_keeps_open_windows() {
+    fn check_prunes_gone_limits_and_stale_windows_only() {
         let mut state = WarnState::default();
-        warnings::due(&mut state, "gone|5h", 60.0, None);
-        warnings::due(&mut state, "ended|5h", 60.0, Some(NOW - 1));
-        warnings::due(&mut state, "open|5h", 60.0, Some(NOW + 60_000));
-        check_at(&snap(vec![]), &mut state, 0);
-        assert_eq!(state.0.keys().collect::<Vec<_>>(), ["open|5h"]);
+        warnings::due(&mut state, "here|old", 60.0, None);
+        warnings::due(&mut state, "absent|5h", 60.0, None);
+        warnings::due(&mut state, "absent|ended", 60.0, Some(NOW - 1));
+        warnings::due(&mut state, "absent|stale", 60.0, Some(NOW - 8 * 86_400_000));
+        let s = snap(vec![account(
+            "here",
+            Service::Claude,
+            "Claude",
+            vec![bucket("5h", 10.0, None)],
+        )]);
+        check_at(&s, &mut state, Some(0));
+        assert_eq!(
+            state.0.keys().collect::<Vec<_>>(),
+            ["absent|5h", "absent|ended"]
+        );
+    }
+
+    #[test]
+    fn empty_snapshot_keeps_state() {
+        let mut state = WarnState::default();
+        warnings::due(&mut state, "claude:x|weekly", 82.0, None);
+        warnings::due(&mut state, "codex:x|5h", 60.0, Some(NOW - 8 * 86_400_000));
+        let before = state.clone();
+        assert!(check_at(&snap(vec![]), &mut state, Some(0)).is_empty());
+        // `on_snapshot` saves only when the state changed, so nothing is written.
+        assert_eq!(state, before);
+    }
+
+    #[test]
+    fn restart_does_not_refire() {
+        let at = |used| {
+            snap(vec![account(
+                "claude:x",
+                Service::Claude,
+                "Claude",
+                vec![bucket("weekly", used, None)],
+            )])
+        };
+        let mut state = WarnState::default();
+        assert_eq!(check_at(&at(82.0), &mut state, Some(0)).len(), 1);
+        // Restart: the first publish comes before any fetch.
+        check_at(&snap(vec![]), &mut state, Some(0));
+        assert!(check_at(&at(83.0), &mut state, Some(0)).is_empty());
+    }
+
+    #[test]
+    fn percent_rounds_down() {
+        let s = snap(vec![account(
+            "claude:x",
+            Service::Claude,
+            "Claude",
+            vec![bucket("5-hour", 89.6, None)],
+        )]);
+        let alerts = check_at(&s, &mut WarnState::default(), Some(0));
+        assert_eq!(alerts[0].level, 80);
+        assert_eq!(alerts[0].body, "5-hour at 89%");
     }
 
     #[test]
@@ -256,7 +307,7 @@ mod tests {
             ),
         ]);
         let mut state = WarnState::default();
-        let alerts = check_at(&s, &mut state, 0);
+        let alerts = check_at(&s, &mut state, Some(0));
         assert_eq!(alerts.len(), 2);
         assert_eq!(alerts[1].title, "Antigravity · Antigravity");
         assert_eq!(alerts[1].body, "Gemini 5h at 55%");

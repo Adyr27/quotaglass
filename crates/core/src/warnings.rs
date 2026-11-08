@@ -41,19 +41,43 @@ pub fn due(state: &mut WarnState, key: &str, used: f64, reset_ms: Option<i64>) -
     Some(level)
 }
 
-/// Removes every key that is not in `live_keys`.
-pub fn prune(state: &mut WarnState, live_keys: &BTreeSet<String>) {
-    state.0.retain(|k, _| live_keys.contains(k));
+/// A stored window that ended more than this long ago is dropped, even for an account that is not loaded.
+pub const STALE_MS: i64 = 7 * 86_400_000;
+
+/// Drops the keys of `present_accounts` that are not in `live_keys` (the limit is gone),
+/// and every key whose stored window ended more than [`STALE_MS`] before `now_ms`.
+/// Keys of other accounts stay: right after start not every account has a reading yet.
+pub fn prune(
+    state: &mut WarnState,
+    present_accounts: &BTreeSet<String>,
+    live_keys: &BTreeSet<String>,
+    now_ms: i64,
+) {
+    state.0.retain(|k, f| {
+        if live_keys.contains(k) {
+            return true;
+        }
+        let present = k
+            .rsplit_once('|')
+            .is_some_and(|(id, _)| present_accounts.contains(id));
+        let stale = f
+            .reset_ms
+            .is_some_and(|r| r < now_ms.saturating_sub(STALE_MS));
+        !present && !stale
+    });
 }
 
-/// The local UTC offset in seconds, or 0 when the OS does not give it.
-pub fn local_offset_secs() -> i32 {
-    time::UtcOffset::current_local_offset().map_or(0, time::UtcOffset::whole_seconds)
+/// The local UTC offset in seconds, or `None` when the OS does not give it.
+pub fn local_offset_secs() -> Option<i32> {
+    time::UtcOffset::current_local_offset()
+        .ok()
+        .map(time::UtcOffset::whole_seconds)
 }
 
 /// "in 2 h 5 min" when the reset is less than 24 h away, else the local weekday and time ("Mon 14:05").
+/// With no known offset (`None`), the time is UTC and the text ends in " UTC".
 /// `None` when `reset_ms` is not a valid time.
-pub fn reset_text(now_ms: i64, reset_ms: i64, offset_secs: i32) -> Option<String> {
+pub fn reset_text(now_ms: i64, reset_ms: i64, offset_secs: Option<i32>) -> Option<String> {
     let left_min = (reset_ms.saturating_sub(now_ms)).max(0) / 60_000;
     if left_min < 24 * 60 {
         let (h, m) = (left_min / 60, left_min % 60);
@@ -63,12 +87,13 @@ pub fn reset_text(now_ms: i64, reset_ms: i64, offset_secs: i32) -> Option<String
             format!("in {h} h {m} min")
         });
     }
-    let offset = time::UtcOffset::from_whole_seconds(offset_secs).unwrap_or(time::UtcOffset::UTC);
+    let offset = offset_secs.and_then(|o| time::UtcOffset::from_whole_seconds(o).ok());
     let at = time::OffsetDateTime::from_unix_timestamp(reset_ms.div_euclid(1000))
         .ok()?
-        .to_offset(offset);
+        .to_offset(offset.unwrap_or(time::UtcOffset::UTC));
     let day = &at.weekday().to_string()[..3];
-    Some(format!("{day} {:02}:{:02}", at.hour(), at.minute()))
+    let zone = if offset.is_some() { "" } else { " UTC" };
+    Some(format!("{day} {:02}:{:02}{zone}", at.hour(), at.minute()))
 }
 
 #[cfg(test)]
@@ -125,30 +150,54 @@ mod tests {
     }
 
     #[test]
-    fn prune_drops_unseen() {
+    fn prune_drops_gone_limits_of_present_accounts_only() {
+        let now = 1_700_000_000_000_i64;
         let mut s = WarnState::default();
         due(&mut s, &key("a", "5h"), 60.0, None);
+        due(&mut s, &key("a", "old"), 60.0, None);
         due(&mut s, &key("b", "5h"), 60.0, None);
-        prune(&mut s, &BTreeSet::from([key("a", "5h")]));
-        assert_eq!(s.0.keys().collect::<Vec<_>>(), [&key("a", "5h")]);
+        due(&mut s, &key("b", "ended"), 60.0, Some(now - 1));
+        due(&mut s, &key("c", "stale"), 60.0, Some(now - STALE_MS - 1));
+        prune(
+            &mut s,
+            &BTreeSet::from(["a".to_string()]),
+            &BTreeSet::from([key("a", "5h")]),
+            now,
+        );
+        assert_eq!(
+            s.0.keys().cloned().collect::<Vec<_>>(),
+            [key("a", "5h"), key("b", "5h"), key("b", "ended")]
+        );
     }
 
     #[test]
     fn reset_text_short_and_long() {
         let now = 1_700_000_000_000_i64;
         assert_eq!(
-            reset_text(now, now + (2 * 60 + 5) * 60_000, 0).as_deref(),
+            reset_text(now, now + (2 * 60 + 5) * 60_000, Some(0)).as_deref(),
             Some("in 2 h 5 min")
         );
         assert_eq!(
-            reset_text(now, now + 7 * 60_000, 0).as_deref(),
+            reset_text(now, now + 7 * 60_000, Some(0)).as_deref(),
             Some("in 7 min")
         );
-        assert_eq!(reset_text(now, now - 1, 0).as_deref(), Some("in 0 min"));
+        assert_eq!(
+            reset_text(now, now - 1, Some(0)).as_deref(),
+            Some("in 0 min")
+        );
         // 2023-11-17 00:00:00 UTC is a Friday; +2 h offset gives 02:00 local.
         assert_eq!(
-            reset_text(now, 1_700_179_200_000, 7_200).as_deref(),
+            reset_text(now, 1_700_179_200_000, Some(7_200)).as_deref(),
             Some("Fri 02:00")
+        );
+        // No known offset: UTC, and the text says so.
+        assert_eq!(
+            reset_text(now, 1_700_179_200_000, None).as_deref(),
+            Some("Fri 00:00 UTC")
+        );
+        assert_eq!(
+            reset_text(now, now + 7 * 60_000, None).as_deref(),
+            Some("in 7 min")
         );
     }
 }

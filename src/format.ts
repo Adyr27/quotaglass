@@ -1,6 +1,6 @@
 // Pure formatting helpers. No DOM, no IPC, no hidden clock: callers pass `nowMs`.
 
-import type { AccountView, BucketView, Connection, Freshness, Service, SourceKind } from "./types";
+import type { AccountView, BucketView, Connection, Service } from "./types";
 
 export const SERVICE_ORDER: readonly Service[] = ["claude", "codex", "antigravity"];
 
@@ -12,45 +12,16 @@ export const SERVICE_NAME: Record<Service, string> = {
 
 export const CONNECTION_ORDER: readonly Connection[] = ["claudeCurrent", "codexCurrent", "antigravityApp", "orca"];
 
-/** Short source names for the meta line of a card. */
-const SOURCE_TAG: Record<SourceKind, string> = {
-  direct: "direct",
-  antigravityApp: "Antigravity app",
-  orca: "Orca",
-};
-
-/** Names for the rows of the Sources panel, one per `connected` entry. */
-const SOURCE_ROW_NAME: Record<Connection, string> = {
+export const CONNECTION_NAME: Record<Connection, string> = {
   claudeCurrent: "Use my current Claude login",
   codexCurrent: "Use my current Codex login",
   antigravityApp: "Use my Antigravity app",
   orca: "Connect Orca (optional)",
 };
 
-export function sourceTag(kind: SourceKind): string {
-  return SOURCE_TAG[kind] ?? kind;
-}
-
-export function sourceRowName(kind: Connection): string {
-  return SOURCE_ROW_NAME[kind] ?? kind;
-}
-
-const HOUR_SECS = 3600;
-const DAY_SECS = 86_400;
-const WEEK_SECS = 604_800;
-const WEEK_MS = WEEK_SECS * 1000;
-
-/** 18000 -> "5 h", 604800 -> "Weekly", 2592000 -> "30 days". Empty string when there is no window. */
-export function formatWindow(secs: number | null): string {
-  if (secs === null || !Number.isFinite(secs) || secs <= 0) return "";
-  if (secs === WEEK_SECS) return "Weekly";
-  if (secs % DAY_SECS === 0) {
-    const days = secs / DAY_SECS;
-    return days === 1 ? "1 day" : `${days} days`;
-  }
-  if (secs < HOUR_SECS) return `${Math.round(secs / 60)} min`;
-  return `${Number((secs / HOUR_SECS).toFixed(1))} h`;
-}
+const MIN_MS = 60_000;
+const HOUR_MS = 60 * MIN_MS;
+const DAY_MS = 24 * HOUR_MS;
 
 // hourCycle h23 keeps midnight as 00:xx. hour12:false gives 24:xx in some locales.
 const weekdayTime = new Intl.DateTimeFormat(undefined, {
@@ -59,42 +30,31 @@ const weekdayTime = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
   hourCycle: "h23",
 });
-const monthDay = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
 
-/** "Sat 11:00" within 7 days, "Nov 14" after that. Empty string when unknown or already past. */
-export function formatReset(resetsAtMs: number | null, nowMs: number): string {
+/** "resets 3 h 30 min" under 24 h, else "resets Sat 11:00". Empty when unknown or past. */
+export function resetText(resetsAtMs: number | null, nowMs: number): string {
   if (resetsAtMs === null || !Number.isFinite(resetsAtMs) || resetsAtMs <= nowMs) return "";
-  const when = new Date(resetsAtMs);
-  return resetsAtMs - nowMs <= WEEK_MS ? weekdayTime.format(when) : monthDay.format(when);
+  const left = resetsAtMs - nowMs;
+  if (left >= DAY_MS) return `resets ${weekdayTime.format(new Date(resetsAtMs))}`;
+  const hours = Math.floor(left / HOUR_MS);
+  const minutes = Math.max(1, Math.ceil((left % HOUR_MS) / MIN_MS));
+  if (hours === 0) return `resets in ${minutes} min`;
+  return minutes === 60 ? `resets ${hours + 1} h` : `resets ${hours} h ${minutes} min`;
 }
 
-/** "just now", "5m ago", "3h ago", "2d ago". Empty string when unknown. */
-export function formatAge(ageSecs: number | null): string {
+/** "updated just now", "updated 4 min ago", "updated 2 h ago", "updated 3 d ago". Empty when unknown. */
+export function updatedText(ageSecs: number | null): string {
   if (ageSecs === null || !Number.isFinite(ageSecs) || ageSecs < 0) return "";
-  if (ageSecs < 60) return "just now";
-  if (ageSecs < HOUR_SECS) return `${Math.floor(ageSecs / 60)}m ago`;
-  if (ageSecs < DAY_SECS) return `${Math.floor(ageSecs / HOUR_SECS)}h ago`;
-  return `${Math.floor(ageSecs / DAY_SECS)}d ago`;
+  if (ageSecs < 60) return "updated just now";
+  if (ageSecs < 3600) return `updated ${Math.floor(ageSecs / 60)} min ago`;
+  if (ageSecs < 86_400) return `updated ${Math.floor(ageSecs / 3600)} h ago`;
+  return `updated ${Math.floor(ageSecs / 86_400)} d ago`;
 }
 
-function clampPercent(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(100, Math.max(0, value));
-}
-
-/** Whole percent used, 0 to 100. */
+/** Whole percent used, 0 to 100. Floored, so a limit never reads as reached before it is. */
 export function usedWhole(usedPercent: number): number {
-  return Math.round(clampPercent(usedPercent));
-}
-
-/** Whole percent left. Always 100 minus the whole percent used, so the two never disagree. */
-export function leftWhole(usedPercent: number): number {
-  return 100 - usedWhole(usedPercent);
-}
-
-/** Bar fill, 0 to 1. */
-export function usedRatio(usedPercent: number): number {
-  return clampPercent(usedPercent) / 100;
+  if (!Number.isFinite(usedPercent)) return 0;
+  return Math.floor(Math.min(100, Math.max(0, usedPercent)));
 }
 
 /** Plan names arrive as the source wrote them ("pro", "max_5x"). Show them in sentence case. */
@@ -103,48 +63,27 @@ export function sentenceCase(value: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-export interface MetaParts {
-  resetsAtMs: number | null;
-  source: SourceKind | null;
-  freshness: Freshness;
-  ageSecs: number | null;
+/** The limit closest to running out; null without readings. */
+export function worstBucket(account: AccountView): BucketView | null {
+  let worst: BucketView | null = null;
+  for (const b of account.buckets) if (worst === null || b.usedPercent > worst.usedPercent) worst = b;
+  return worst;
 }
 
-/** "Resets Sat 11:00 · via Orca · 2h ago". The age only appears when the reading is not live. */
-export function metaLine(parts: MetaParts, nowMs: number): string {
-  const out: string[] = [];
-  const reset = formatReset(parts.resetsAtMs, nowMs);
-  if (reset !== "") out.push(`Resets ${reset}`);
-  if (parts.source !== null) out.push(`via ${sourceTag(parts.source)}`);
-  if (parts.freshness !== "live") {
-    const age = formatAge(parts.ageSecs);
-    if (age !== "") out.push(age);
-  }
-  return out.join(" \u00b7 ");
+/** Highest whole percent used over an account's limits; null without readings. */
+export function worstUsed(account: AccountView): number | null {
+  const b = worstBucket(account);
+  return b === null ? null : usedWhole(b.usedPercent);
 }
 
-export interface MostRoom {
-  account: AccountView;
-  bucket: BucketView;
-  left: number;
-}
-
-/**
- * The account that still has the most room right now: among accounts with a live, working
- * reading, the one whose tightest bucket is the least used. Null when no account qualifies.
- */
-export function mostRoom(accounts: readonly AccountView[]): MostRoom | null {
-  let best: MostRoom | null = null;
-  for (const account of accounts) {
-    const bucket = account.headline;
-    if (account.state !== "ok" || account.freshness !== "live" || bucket === null || bucket.limitReached) continue;
-    const left = leftWhole(bucket.usedPercent);
-    if (left <= 0) continue;
-    if (best === null || bucket.usedPercent < best.bucket.usedPercent) best = { account, bucket, left };
-  }
-  return best;
-}
-
-export function findingText(room: MostRoom): string {
-  return `Most room: ${room.account.label}, ${room.left}% left on ${room.bucket.name}`;
+/** Accounts in panel order: service, current login first, then label. Hidden accounts are left out. */
+export function visibleAccounts(accounts: readonly AccountView[]): AccountView[] {
+  return accounts
+    .filter((a) => !a.hidden)
+    .sort(
+      (a, b) =>
+        SERVICE_ORDER.indexOf(a.service) - SERVICE_ORDER.indexOf(b.service) ||
+        Number(b.currentLogin) - Number(a.currentLogin) ||
+        a.label.localeCompare(b.label),
+    );
 }

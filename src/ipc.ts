@@ -141,8 +141,9 @@ export function onOpenSettings(handler: () => void): Promise<void> {
   return subscribe<null>("open-settings", () => handler());
 }
 
-export function setPanelOpen(open: boolean): Promise<Result<void>> {
-  return call<void>("set_panel_open", "Could not resize the window.", { open });
+/** Resolves to true while the panel extends above the pill. */
+export function setPanelOpen(open: boolean): Promise<Result<boolean>> {
+  return call<boolean>("set_panel_open", "Could not resize the window.", { open });
 }
 
 export function onTheme(handler: (theme: "light" | "dark") => void): Promise<void> {

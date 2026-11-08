@@ -311,7 +311,8 @@ pub fn resend_theme(app: &AppHandle) {
 }
 
 /// Opens the panel from the pill (one resize) or closes it back to the pill.
-pub fn set_panel_open(app: &AppHandle, open: bool) -> tauri::Result<()> {
+/// Returns true while the panel extends above the pill, so the UI keeps the pill row at its bottom.
+pub fn set_panel_open(app: &AppHandle, open: bool) -> tauri::Result<bool> {
     let window = app
         .get_webview_window("main")
         .ok_or(tauri::Error::WindowNotFound)?;
@@ -319,11 +320,11 @@ pub fn set_panel_open(app: &AppHandle, open: bool) -> tauri::Result<()> {
     let mut slot = lock(&ws.open);
     let now = current_rect(&window)?;
     if open {
-        if slot.is_some() {
-            return Ok(());
+        if let Some((pill, panel)) = *slot {
+            return Ok(panel.y < pill.y);
         }
         let Some(screen) = screen_for(&window, now) else {
-            return Ok(());
+            return Ok(false);
         };
         let (w, h) = (scaled(PANEL.0, screen.scale), scaled(PANEL.1, screen.scale));
         let panel = panel_rect(now, w, h, screen.work);
@@ -331,12 +332,13 @@ pub fn set_panel_open(app: &AppHandle, open: bool) -> tauri::Result<()> {
         ws.panel_open.store(true, Ordering::SeqCst);
         place(&window, panel)?;
         *slot = Some((now, panel));
+        return Ok(panel.y < now.y);
     } else if let Some((pill, panel)) = slot.take() {
         let back = clamp_to_monitors(pill_after_close(pill, panel, now), &monitor_rects(&window));
         place(&window, back)?;
         ws.panel_open.store(false, Ordering::SeqCst);
     }
-    Ok(())
+    Ok(false)
 }
 
 fn save_current(app: &AppHandle) {

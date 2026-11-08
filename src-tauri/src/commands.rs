@@ -84,9 +84,9 @@ pub fn get_snapshot(app: AppHandle) -> Snapshot {
     state.scheduler.snapshot()
 }
 
-/// Opens the panel from the pill, or closes it back to the pill.
+/// Opens the panel from the pill, or closes it back to the pill. True: the panel grew upward.
 #[tauri::command]
-pub async fn set_panel_open(app: AppHandle, open: bool) -> Result<(), String> {
+pub async fn set_panel_open(app: AppHandle, open: bool) -> Result<bool, String> {
     window::set_panel_open(&app, open).map_err(|_| "Could not resize the window.".to_string())
 }
 

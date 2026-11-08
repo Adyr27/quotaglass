@@ -94,11 +94,11 @@ impl Default for Settings {
     }
 }
 
-/// Everything the UI may change. Added accounts belong to the account commands, and the version is fixed.
+/// Everything the UI may change. Added accounts belong to the account commands, the window rect belongs
+/// to the app, and the version is fixed.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatch {
-    pub pill_position: Option<WindowRect>,
     pub always_on_top: Option<bool>,
     pub autostart: Option<bool>,
     pub refresh_minutes: Option<u8>,
@@ -112,9 +112,6 @@ pub struct SettingsPatch {
 
 impl Settings {
     pub fn apply(&mut self, patch: SettingsPatch) {
-        if let Some(v) = patch.pill_position {
-            self.pill_position = Some(v);
-        }
         if let Some(v) = patch.always_on_top {
             self.always_on_top = v;
         }
@@ -158,6 +155,14 @@ impl Settings {
             true
         });
 
+        let mut hidden = Vec::with_capacity(self.hidden_accounts.len());
+        for id in self.hidden_accounts.drain(..) {
+            if !hidden.contains(&id) {
+                hidden.push(id);
+            }
+        }
+        self.hidden_accounts = hidden;
+
         let mut connected = Vec::with_capacity(self.connected.len());
         for c in self.connected.drain(..) {
             if !connected.contains(&c) {
@@ -177,7 +182,7 @@ impl Settings {
     }
 }
 
-/// A v0.1.0 file keeps only its window rect and refresh interval. Every email-keyed field is dropped.
+/// A v0.1.0 file keeps only its window rect, refresh interval and autostart. Every email-keyed field is dropped.
 fn migrate_v1(raw: &serde_json::Value) -> Settings {
     let pill_position = raw
         .get("window")
@@ -187,9 +192,14 @@ fn migrate_v1(raw: &serde_json::Value) -> Settings {
         .and_then(serde_json::Value::as_u64)
         .and_then(|m| u8::try_from(m).ok())
         .unwrap_or(Settings::default().refresh_minutes);
+    let autostart = raw
+        .get("autostart")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     Settings {
         pill_position,
         refresh_minutes,
+        autostart,
         ..Settings::default()
     }
 }
@@ -285,7 +295,8 @@ mod tests {
             "sources": { "direct": true, "orca": true, "omp": true },
             "collapsed": ["codex"],
             "hiddenServices": ["claude"],
-            "firstRunDone": true
+            "firstRunDone": true,
+            "autostart": true
         });
         write_file(&dir, &serde_json::to_vec(&v1).unwrap());
 
@@ -301,6 +312,7 @@ mod tests {
             })
         );
         assert_eq!(s.refresh_minutes, 5);
+        assert!(s.autostart, "autostart is kept");
         assert!(s.always_on_top);
         assert!(s.connected.is_empty());
         assert!(s.labels.is_empty());
@@ -319,6 +331,7 @@ mod tests {
         assert_eq!(s.version, 2);
         assert_eq!(s.refresh_minutes, 3);
         assert_eq!(s.pill_position, None);
+        assert!(!s.autostart, "autostart defaults to off");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -351,6 +364,16 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(s.pinned_accounts, ["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn hidden_accounts_deduped_in_order() {
+        let mut s = Settings::default();
+        s.apply(SettingsPatch {
+            hidden_accounts: Some(["b", "a", "b", "c", "a"].map(String::from).to_vec()),
+            ..Default::default()
+        });
+        assert_eq!(s.hidden_accounts, ["b", "a", "c"]);
     }
 
     #[test]

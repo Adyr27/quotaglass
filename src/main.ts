@@ -25,7 +25,7 @@ let settings: Settings | null = null;
 let detected: SourceStatus[] | null = null;
 /** First run only: the switches as the person sets them, saved when they press Done. */
 let draft: SourceSwitches | null = null;
-/** Set once Done is pressed, so an empty `connected` list does not bring the first-run panel back this session. */
+/** Set once Done is pressed, or at load when sources are already connected, so an empty `connected` list does not bring the first-run panel back this session. */
 let firstRunDismissed = false;
 /** Chip and group state for this session only. The UI rebuild replaces it. */
 const boardView: { hiddenServices: Service[]; collapsed: Service[] } = { hiddenServices: [], collapsed: [] };
@@ -131,6 +131,7 @@ function isFirstRun(): boolean {
   return settings !== null && settings.connected.length === 0 && !firstRunDismissed;
 }
 
+// TODO(v0.2-task7): remove this switches <-> `connected` bridge with the UI rebuild.
 /** Bridge from the v0.1.0 switches to `connected` until the UI rebuild. Antigravity is kept as it is. */
 function switchesOf(connected: readonly Connection[]): SourceSwitches {
   return {
@@ -255,7 +256,11 @@ function takeSnapshot(next: Snapshot): void {
 
 async function load(): Promise<void> {
   const [settingsResult, snapshotResult] = await Promise.all([getSettings(), getSnapshot()]);
-  if (settingsResult.ok) settings = settingsResult.value;
+  if (settingsResult.ok) {
+    settings = settingsResult.value;
+    // Only a session that starts with nothing connected shows the first-run panel.
+    if (settings.connected.length > 0) firstRunDismissed = true;
+  }
   if (snapshotResult.ok) takeSnapshot(snapshotResult.value);
   render();
   if (isFirstRun()) {

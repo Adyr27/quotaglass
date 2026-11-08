@@ -28,6 +28,7 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+// TODO(v0.2-task7): remove this `connected` -> switches mapping when the scheduler builds providers per connection.
 /// The v0.1.0 source switches, derived from `connected` until the scheduler builds providers per connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Switches {

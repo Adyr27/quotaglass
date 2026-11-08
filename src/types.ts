@@ -86,7 +86,6 @@ export interface Settings {
 export type SettingsPatch = Partial<
   Pick<
     Settings,
-    | "pillPosition"
     | "alwaysOnTop"
     | "autostart"
     | "refreshMinutes"

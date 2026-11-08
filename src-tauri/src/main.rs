@@ -15,7 +15,7 @@ use settings::SettingsStore;
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
-use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -35,7 +35,11 @@ fn main() {
         .setup(|app| {
             let path = SettingsStore::default_path().ok_or("APPDATA is not set")?;
             let store = SettingsStore::new(path);
-            let settings = store.load();
+            let mut settings = store.load();
+            // The OS entry is the truth, so the file and the OS cannot drift apart.
+            if let Ok(enabled) = app.autolaunch().is_enabled() {
+                settings.autostart = enabled;
+            }
 
             let handle = app.handle().clone();
             let env = Env::from_system().map_err(|e| format!("Cannot start: {e:?}"))?;

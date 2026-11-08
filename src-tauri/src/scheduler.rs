@@ -1,6 +1,6 @@
 //! Runs each enabled source on its own timer and merges the results into one snapshot.
 
-use crate::settings::{Settings, Sources};
+use crate::settings::{Connection, Settings};
 use quotaglass_core::merge::{self, LastReadings};
 use quotaglass_core::sources::claude_direct::ClaudeDirect;
 use quotaglass_core::sources::codex_direct::CodexDirect;
@@ -28,7 +28,22 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn enabled(provider: usize, sources: &Sources) -> bool {
+/// The v0.1.0 source switches, derived from `connected` until the scheduler builds providers per connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Switches {
+    pub direct: bool,
+    pub orca: bool,
+}
+
+pub fn switches(settings: &Settings) -> Switches {
+    let has = |c: Connection| settings.connected.contains(&c);
+    Switches {
+        direct: has(Connection::ClaudeCurrent) || has(Connection::CodexCurrent),
+        orca: has(Connection::Orca),
+    }
+}
+
+fn enabled(provider: usize, sources: &Switches) -> bool {
     match provider {
         CLAUDE | CODEX => sources.direct,
         _ => sources.orca,
@@ -100,7 +115,7 @@ struct State {
     last: LastReadings,
     snapshot: Snapshot,
     refresh_minutes: u8,
-    applied_sources: Option<Sources>,
+    applied_sources: Option<Switches>,
 }
 
 struct Shared {
@@ -250,17 +265,18 @@ impl Scheduler {
     pub fn apply(&self, settings: &Settings) {
         let restart = {
             let mut st = lock(&self.shared.state);
-            let sources_changed = st.applied_sources != Some(settings.sources);
+            let sources = switches(settings);
+            let sources_changed = st.applied_sources != Some(sources);
             let restart = sources_changed || st.refresh_minutes != settings.refresh_minutes;
             st.refresh_minutes = settings.refresh_minutes;
             if sources_changed {
                 for i in 0..PROVIDERS {
-                    if !enabled(i, &settings.sources) {
+                    if !enabled(i, &sources) {
                         st.outcomes[i] = None;
                     }
                 }
                 st.last = LastReadings::default();
-                st.applied_sources = Some(settings.sources);
+                st.applied_sources = Some(sources);
             }
             self.shared.publish(&mut st);
             restart
@@ -275,8 +291,9 @@ impl Scheduler {
         for t in tasks.drain(..) {
             t.handle.abort();
         }
+        let sources = switches(settings);
         for i in 0..PROVIDERS {
-            if !enabled(i, &settings.sources) {
+            if !enabled(i, &sources) {
                 continue;
             }
             let base = u64::from(settings.refresh_minutes) * 60;

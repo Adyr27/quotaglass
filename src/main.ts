@@ -13,8 +13,8 @@ import {
   setProblemListener,
   updateSettings,
 } from "./ipc";
-import type { AccountView, Service, Settings, SettingsPatch, Snapshot, SourceStatus, SourceSwitches, SwitchableSource } from "./types";
-import { createBoard } from "./view/board";
+import type { AccountView, Connection, Service, Settings, SettingsPatch, Snapshot, SourceStatus, SourceSwitches, SwitchableSource } from "./types";
+import { createBoard, type BoardView } from "./view/board";
 import { h, iconPin, iconRefresh, iconSliders, markRing, setAttr, show } from "./view/dom";
 import { createOverlay } from "./view/overlay";
 import { createSettings } from "./view/settings";
@@ -25,6 +25,10 @@ let settings: Settings | null = null;
 let detected: SourceStatus[] | null = null;
 /** First run only: the switches as the person sets them, saved when they press Done. */
 let draft: SourceSwitches | null = null;
+/** Set once Done is pressed, so an empty `connected` list does not bring the first-run panel back this session. */
+let firstRunDismissed = false;
+/** Chip and group state for this session only. The UI rebuild replaces it. */
+const boardView: { hiddenServices: Service[]; collapsed: Service[] } = { hiddenServices: [], collapsed: [] };
 let settingsOpen = false;
 let refreshing = false;
 let saving = false;
@@ -33,7 +37,7 @@ let opener: HTMLElement | null = null;
 // Header
 
 const refreshButton = h("button", { class: "icon-btn", type: "button", "aria-label": "Refresh" }, [iconRefresh()]);
-const pinButton = h("button", { class: "icon-btn", type: "button", "aria-label": "Pin window", "aria-pressed": "false" }, [iconPin()]);
+const pinButton = h("button", { class: "icon-btn", type: "button", "aria-label": "Always on top", "aria-pressed": "false" }, [iconPin()]);
 const settingsButton = h(
   "button",
   { class: "icon-btn", type: "button", "aria-label": "Settings", "aria-expanded": "false", "aria-controls": "settings-panel" },
@@ -52,8 +56,8 @@ const board = createBoard({
   onOpen: (accountId, from) => openOverlay(accountId, from),
   onRetry: () => void refresh(),
   onSignIn: (service) => void connect(service),
-  onToggleService: (service) => void toggleIn("hiddenServices", service),
-  onToggleGroup: (service) => void toggleIn("collapsed", service),
+  onToggleService: (service) => toggleIn("hiddenServices", service),
+  onToggleGroup: (service) => toggleIn("collapsed", service),
 });
 
 const firstRunRows = createSourceRows("first", (kind: SwitchableSource, next: boolean) => {
@@ -73,7 +77,7 @@ const settingsPanel = createSettings({
   onRefreshMinutes: (minutes) => void apply({ refreshMinutes: minutes }),
   onToggle: (key, next) => void apply({ [key]: next }),
   onSource: (kind, next) => {
-    if (settings !== null) void apply({ sources: { ...settings.sources, [kind]: next } });
+    if (settings !== null) void apply({ connected: connectionsFrom({ ...switchesOf(settings.connected), [kind]: next }, settings.connected) });
   },
   onClose: () => closeSettings(),
 });
@@ -89,7 +93,7 @@ document.getElementById("app")?.append(shell, overlay.el);
 
 function render(): void {
   const nowMs = Date.now();
-  const firstRunMode = settings !== null && !settings.firstRunDone;
+  const firstRunMode = isFirstRun();
   const boardMode = !firstRunMode && snapshot !== null && settings !== null && !settingsOpen;
   const settingsMode = !firstRunMode && settings !== null && settingsOpen;
 
@@ -98,17 +102,16 @@ function render(): void {
   show(settingsPanel.el, settingsMode);
   show(headerActions, !firstRunMode);
 
-  const pinned = settings?.pinned === true;
-  setAttr(header, "data-tauri-drag-region", pinned ? null : "");
-  setAttr(pinButton, "aria-pressed", pinned ? "true" : "false");
+  const onTop = settings?.alwaysOnTop === true;
+  setAttr(pinButton, "aria-pressed", onTop ? "true" : "false");
   setAttr(settingsButton, "aria-expanded", settingsMode ? "true" : "false");
   refreshButton.classList.toggle("is-busy", refreshing);
   setAttr(refreshButton, "aria-busy", refreshing ? "true" : null);
 
-  if (snapshot !== null && settings !== null) board.update(snapshot, settings, nowMs, refreshing);
+  if (snapshot !== null && settings !== null) board.update(snapshot, boardView satisfies BoardView, nowMs, refreshing);
   if (settings !== null) {
-    settingsPanel.update(settings, withEnabled(detected, settings.sources));
-    firstRunRows.update(withEnabled(detected, draft ?? settings.sources));
+    settingsPanel.update(settings, withEnabled(detected, switchesOf(settings.connected)));
+    firstRunRows.update(withEnabled(detected, draft ?? switchesOf(settings.connected)));
   }
   firstRunDone.classList.toggle("is-disabled", saving);
   setAttr(firstRunDone, "aria-disabled", saving ? "true" : null);
@@ -122,6 +125,25 @@ function render(): void {
 
 function withEnabled(rows: SourceStatus[] | null, switches: SourceSwitches): SourceStatus[] {
   return (rows ?? []).map((row) => ({ ...row, enabled: switches[row.kind] }));
+}
+
+function isFirstRun(): boolean {
+  return settings !== null && settings.connected.length === 0 && !firstRunDismissed;
+}
+
+/** Bridge from the v0.1.0 switches to `connected` until the UI rebuild. Antigravity is kept as it is. */
+function switchesOf(connected: readonly Connection[]): SourceSwitches {
+  return {
+    direct: connected.includes("claudeCurrent") || connected.includes("codexCurrent"),
+    orca: connected.includes("orca"),
+  };
+}
+
+function connectionsFrom(switches: SourceSwitches, current: readonly Connection[]): Connection[] {
+  const out: Connection[] = current.filter((c) => c === "antigravityApp");
+  if (switches.direct) out.push("claudeCurrent", "codexCurrent");
+  if (switches.orca) out.push("orca");
+  return out;
 }
 
 function findAccount(id: string): AccountView | null {
@@ -151,7 +173,7 @@ function closeOverlay(): void {
 // Settings
 
 function openSettings(): void {
-  if (settings === null || !settings.firstRunDone || settingsOpen) return;
+  if (settings === null || isFirstRun() || settingsOpen) return;
   if (overlay.openId !== null) closeOverlay();
   settingsOpen = true;
   render();
@@ -169,7 +191,7 @@ async function loadSources(): Promise<void> {
   const result = await detectSources();
   if (!result.ok) return;
   detected = result.value;
-  if (draft === null && settings !== null && !settings.firstRunDone) draft = switchesFrom(result.value);
+  if (draft === null && isFirstRun()) draft = switchesFrom(result.value);
   render();
 }
 
@@ -185,22 +207,23 @@ async function apply(patch: SettingsPatch): Promise<void> {
   render(); // on a failure this also puts every switch back to the saved value
 }
 
-async function toggleIn(key: "hiddenServices" | "collapsed", service: Service): Promise<void> {
-  if (settings === null) return;
-  const current = settings[key];
-  await apply({ [key]: current.includes(service) ? current.filter((s) => s !== service) : [...current, service] });
+function toggleIn(key: "hiddenServices" | "collapsed", service: Service): void {
+  const current = boardView[key];
+  boardView[key] = current.includes(service) ? current.filter((s) => s !== service) : [...current, service];
+  render();
 }
 
 async function finishFirstRun(): Promise<void> {
   if (saving) return;
   saving = true;
   render();
-  const patch: SettingsPatch = { firstRunDone: true };
-  if (draft !== null) patch.sources = draft;
+  const patch: SettingsPatch = {};
+  if (draft !== null) patch.connected = connectionsFrom(draft, settings?.connected ?? []);
   const result = await updateSettings(patch);
   saving = false;
   if (result.ok) {
     settings = result.value;
+    firstRunDismissed = true;
     draft = null;
     render();
     void refresh();
@@ -235,7 +258,7 @@ async function load(): Promise<void> {
   if (settingsResult.ok) settings = settingsResult.value;
   if (snapshotResult.ok) takeSnapshot(snapshotResult.value);
   render();
-  if (settings !== null && !settings.firstRunDone) {
+  if (isFirstRun()) {
     await loadSources();
     firstRunHeading.focus({ preventScroll: true });
   }
@@ -254,7 +277,7 @@ setProblemListener((message) => {
 
 refreshButton.addEventListener("click", () => void refresh());
 pinButton.addEventListener("click", () => {
-  if (settings !== null) void apply({ pinned: !settings.pinned });
+  if (settings !== null) void apply({ alwaysOnTop: !settings.alwaysOnTop });
 });
 settingsButton.addEventListener("click", () => {
   if (settingsOpen) closeSettings();

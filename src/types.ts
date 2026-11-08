@@ -52,30 +52,50 @@ export interface WindowRect {
 
 export type SourceSwitches = Record<SwitchableSource, boolean>;
 
+export type Theme = "system" | "light" | "dark";
+
+export type Material = "acrylic" | "mica" | "clear";
+
+/** A one-click source the person switched on. */
+export type Connection = "claudeCurrent" | "codexCurrent" | "antigravityApp" | "orca";
+
+/** An account signed in through "+ Add account". Its login stays in `profileDir`. */
+export interface AddedAccount {
+  id: string;
+  service: Service;
+  profileDir: string;
+}
+
 export interface Settings {
-  version: 1;
-  window: WindowRect | null;
-  pinned: boolean;
+  version: 2;
+  pillPosition: WindowRect | null;
   alwaysOnTop: boolean;
   autostart: boolean;
   refreshMinutes: number;
-  sources: SourceSwitches;
-  collapsed: Service[];
-  hiddenServices: Service[];
-  firstRunDone: boolean;
+  theme: Theme;
+  material: Material;
+  connected: Connection[];
+  addedAccounts: AddedAccount[];
+  /** Account IDs in display order, at most 4. */
+  pinnedAccounts: string[];
+  hiddenAccounts: string[];
+  /** Account ID to label, at most 40 characters each. */
+  labels: Record<string, string>;
 }
 
 export type SettingsPatch = Partial<
   Pick<
     Settings,
-    | "pinned"
+    | "pillPosition"
     | "alwaysOnTop"
     | "autostart"
     | "refreshMinutes"
-    | "sources"
-    | "collapsed"
-    | "hiddenServices"
-    | "firstRunDone"
+    | "theme"
+    | "material"
+    | "connected"
+    | "pinnedAccounts"
+    | "hiddenAccounts"
+    | "labels"
   >
 >;
 

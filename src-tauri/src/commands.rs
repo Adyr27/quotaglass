@@ -1,6 +1,6 @@
 //! The only functions the UI can call. Errors are fixed short strings; nothing secret passes through here.
 
-use crate::scheduler::{lock, Scheduler};
+use crate::scheduler::{lock, switches, Scheduler};
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 use quotaglass_core::view::Snapshot;
 use quotaglass_core::{Service, SourceKind};
@@ -32,7 +32,7 @@ pub fn emit_backdrop(app: &AppHandle, acrylic: bool) {
 }
 
 /// Applies a patch: window and autostart side effects first, then the file, then the scheduler.
-/// Used by the `update_settings` command and the tray's Pin item.
+/// Used by the `update_settings` command and the tray's Pin item (always on top).
 pub fn update(app: &AppHandle, patch: SettingsPatch) -> Result<Settings, String> {
     let state = app.state::<AppState>();
     let (before, after) = {
@@ -93,7 +93,7 @@ pub fn refresh_now(app: AppHandle) {
 pub fn detect_sources(app: AppHandle) -> Vec<SourceStatus> {
     let state = app.state::<AppState>();
     let (direct, orca) = state.scheduler.detected();
-    let on = lock(&state.settings).sources;
+    let on = switches(&lock(&state.settings));
     vec![
         SourceStatus {
             kind: SourceKind::Direct,

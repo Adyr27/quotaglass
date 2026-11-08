@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show/Hide", true, None::<&str>)?;
-    // Static label: the UI can also change `pinned`, so a Pin/Unpin label could go stale.
+    // Static label: the UI can also change `always_on_top`, so a Pin/Unpin label could go stale.
     let pin = MenuItem::with_id(app, "pin", "Pin or unpin", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -47,11 +47,11 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn toggle_pin(app: &AppHandle) {
-    let pinned = lock(&app.state::<AppState>().settings).pinned;
+    let on_top = lock(&app.state::<AppState>().settings).always_on_top;
     match commands::update(
         app,
         SettingsPatch {
-            pinned: Some(!pinned),
+            always_on_top: Some(!on_top),
             ..Default::default()
         },
     ) {

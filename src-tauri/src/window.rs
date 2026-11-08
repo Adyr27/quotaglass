@@ -64,7 +64,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<AppState>();
     let settings = lock(&state.settings).clone();
 
-    if let Some(saved) = settings.window {
+    if let Some(saved) = settings.pill_position {
         let monitors: Vec<MonitorRect> = window
             .available_monitors()?
             .iter()
@@ -127,10 +127,10 @@ fn save_current(app: &AppHandle) {
 
     let state = app.state::<AppState>();
     let mut settings = lock(&state.settings);
-    if settings.window == Some(rect) {
+    if settings.pill_position == Some(rect) {
         return;
     }
-    settings.window = Some(rect);
+    settings.pill_position = Some(rect);
     if state.store.save(&settings).is_err() {
         tracing::warn!("could not save the window position");
     }

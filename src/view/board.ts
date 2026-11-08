@@ -1,7 +1,7 @@
 // The main view: finding line, service filter, and one collapsible group of cards per service.
 
 import { SERVICE_NAME, SERVICE_ORDER, findingText, mostRoom } from "../format";
-import type { AccountView, Service, Settings, Snapshot } from "../types";
+import type { AccountView, Service, Snapshot } from "../types";
 import { createCard, type Card } from "./card";
 import { h, iconChevron, setText, show, syncChildren } from "./dom";
 
@@ -13,9 +13,15 @@ export interface BoardDeps {
   onToggleGroup(service: Service): void;
 }
 
+/** Session-only chip and group state. Not saved since settings v2. */
+export interface BoardView {
+  hiddenServices: readonly Service[];
+  collapsed: readonly Service[];
+}
+
 export interface Board {
   readonly el: HTMLElement;
-  update(snapshot: Snapshot, settings: Settings, nowMs: number, refreshing: boolean): void;
+  update(snapshot: Snapshot, view: BoardView, nowMs: number, refreshing: boolean): void;
   focusCard(accountId: string): boolean;
 }
 
@@ -74,7 +80,7 @@ export function createBoard(deps: BoardDeps): Board {
     groupsEl.append(groupEl);
   }
 
-  function update(snapshot: Snapshot, settings: Settings, nowMs: number, refreshing: boolean): void {
+  function update(snapshot: Snapshot, view: BoardView, nowMs: number, refreshing: boolean): void {
     const ctx = { nowMs, refreshing, onOpen: deps.onOpen, onRetry: deps.onRetry, onSignIn: deps.onSignIn };
     const byService = new Map<Service, AccountView[]>();
     for (const account of snapshot.accounts) {
@@ -93,8 +99,8 @@ export function createBoard(deps: BoardDeps): Board {
       const group = groups.get(service);
       if (chip === undefined || group === undefined) continue;
 
-      const hidden = settings.hiddenServices.includes(service);
-      const collapsed = settings.collapsed.includes(service);
+      const hidden = view.hiddenServices.includes(service);
+      const collapsed = view.collapsed.includes(service);
 
       show(chip.el, accounts.length > 0);
       setText(chip.count, String(accounts.length));

@@ -1,10 +1,9 @@
 //! Runs each enabled source on its own timer and merges the results into one snapshot.
 
 use crate::settings::{Settings, Sources};
-use quotaglass_core::merge::{self, LastReadings, Overrides};
+use quotaglass_core::merge::{self, LastReadings};
 use quotaglass_core::sources::claude_direct::ClaudeDirect;
 use quotaglass_core::sources::codex_direct::CodexDirect;
-use quotaglass_core::sources::omp::Omp;
 use quotaglass_core::sources::orca::Orca;
 use quotaglass_core::view::Snapshot;
 use quotaglass_core::{Env, Provider, Service, SourceOutcome};
@@ -19,10 +18,8 @@ use tokio::time::{interval_at, Instant, Interval, MissedTickBehavior};
 const CLAUDE: usize = 0;
 const CODEX: usize = 1;
 const ORCA: usize = 2;
-const OMP: usize = 3;
-const PROVIDERS: usize = 4;
+const PROVIDERS: usize = 3;
 
-const OMP_SECS: u64 = 60;
 /// Freshness, ages and the headline depend on the clock, so the snapshot is rebuilt this often between fetches.
 const REPUBLISH_SECS: u64 = 30;
 const BACKOFF_CAP_SECS: u64 = 900;
@@ -34,8 +31,7 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 fn enabled(provider: usize, sources: &Sources) -> bool {
     match provider {
         CLAUDE | CODEX => sources.direct,
-        ORCA => sources.orca,
-        _ => sources.omp,
+        _ => sources.orca,
     }
 }
 
@@ -103,7 +99,6 @@ struct State {
     outcomes: Vec<Option<SourceOutcome>>,
     last: LastReadings,
     snapshot: Snapshot,
-    overrides: Overrides,
     refresh_minutes: u8,
     applied_sources: Option<Sources>,
 }
@@ -150,7 +145,6 @@ impl Shared {
         let accounts = merge::build(
             &outcomes,
             &mut st.last,
-            &st.overrides,
             &connectable(&self.env),
             refresh_secs,
             now,
@@ -203,7 +197,6 @@ impl Scheduler {
             Box::new(ClaudeDirect),
             Box::new(CodexDirect),
             Box::new(Orca::new()),
-            Box::new(Omp),
         ];
         debug_assert_eq!(providers.len(), PROVIDERS);
         let snapshot = Snapshot {
@@ -214,7 +207,6 @@ impl Scheduler {
             outcomes: (0..PROVIDERS).map(|_| None).collect(),
             last: LastReadings::default(),
             snapshot,
-            overrides: Overrides::default(),
             refresh_minutes: 2,
             applied_sources: None,
         };
@@ -237,13 +229,12 @@ impl Scheduler {
         sign_in_tool(&self.shared.env, service)
     }
 
-    /// (direct, orca, omp): whether each source can apply on this PC.
-    pub fn detected(&self) -> (bool, bool, bool) {
+    /// (direct, orca): whether each source can apply on this PC.
+    pub fn detected(&self) -> (bool, bool) {
         let (env, p) = (&self.shared.env, &self.shared.providers);
         (
             p[CLAUDE].detect(env) || p[CODEX].detect(env),
             p[ORCA].detect(env),
-            p[OMP].detect(env),
         )
     }
 
@@ -254,14 +245,13 @@ impl Scheduler {
         }
     }
 
-    /// Takes the settings the scheduler cares about. Override changes only rebuild the snapshot.
+    /// Takes the settings the scheduler cares about.
     /// A change of sources or refresh interval restarts the timers, which also fetches right away.
     pub fn apply(&self, settings: &Settings) {
         let restart = {
             let mut st = lock(&self.shared.state);
             let sources_changed = st.applied_sources != Some(settings.sources);
             let restart = sources_changed || st.refresh_minutes != settings.refresh_minutes;
-            st.overrides = settings.overrides.clone();
             st.refresh_minutes = settings.refresh_minutes;
             if sources_changed {
                 for i in 0..PROVIDERS {
@@ -289,11 +279,7 @@ impl Scheduler {
             if !enabled(i, &settings.sources) {
                 continue;
             }
-            let base = if i == OMP {
-                OMP_SECS
-            } else {
-                u64::from(settings.refresh_minutes) * 60
-            };
+            let base = u64::from(settings.refresh_minutes) * 60;
             let wake = Arc::new(Notify::new());
             let shared = self.shared.clone();
             let handle = tauri::async_runtime::spawn(run_loop(base, wake.clone(), move || {

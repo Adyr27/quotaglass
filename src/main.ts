@@ -79,16 +79,7 @@ const settingsPanel = createSettings({
 });
 settingsPanel.el.id = "settings-panel";
 
-const overlay = createOverlay(
-  () => closeOverlay(),
-  (accountId, kind) => {
-    if (settings === null) return;
-    const pinned = { ...settings.overrides.pinned };
-    if (kind === null) delete pinned[accountId];
-    else pinned[accountId] = kind;
-    void apply({ overrides: { ...settings.overrides, pinned } });
-  },
-);
+const overlay = createOverlay(() => closeOverlay());
 
 const views = h("div", { class: "views" }, [board.el, firstRun, settingsPanel.el]);
 const shell = h("div", { class: "shell" }, [header, problem, views]);
@@ -125,7 +116,7 @@ function render(): void {
   if (overlay.openId !== null) {
     const account = findAccount(overlay.openId);
     if (account === null) closeOverlay();
-    else overlay.update(account, nowMs, settings?.overrides.pinned[account.id] ?? null);
+    else overlay.update(account, nowMs);
   }
 }
 
@@ -144,7 +135,7 @@ function openOverlay(accountId: string, from: HTMLElement): void {
   if (account === null) return;
   opener = from;
   shell.inert = true;
-  overlay.open(account, Date.now(), settings?.overrides.pinned[account.id] ?? null);
+  overlay.open(account, Date.now());
 }
 
 function closeOverlay(): void {
@@ -183,7 +174,7 @@ async function loadSources(): Promise<void> {
 }
 
 function switchesFrom(rows: readonly SourceStatus[]): SourceSwitches {
-  const out: SourceSwitches = { direct: false, orca: false, omp: false };
+  const out: SourceSwitches = { direct: false, orca: false };
   for (const row of rows) out[row.kind] = row.enabled;
   return out;
 }

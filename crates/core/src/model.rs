@@ -18,14 +18,13 @@ impl Service {
     }
 }
 
-/// Declaration order is the merge priority: Direct beats Orca beats Omp beats SessionKey.
+/// Declaration order is the display order. `Ord` also orders the stored readings in `merge`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SourceKind {
     Direct,
+    AntigravityApp,
     Orca,
-    Omp,
-    SessionKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -139,10 +138,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_kind_priority() {
-        assert!(SourceKind::Direct < SourceKind::Orca);
-        assert!(SourceKind::Orca < SourceKind::Omp);
-        assert!(SourceKind::Omp < SourceKind::SessionKey);
+    fn source_kind_serialises_camel_case() {
+        let names: Vec<String> = [
+            SourceKind::Direct,
+            SourceKind::AntigravityApp,
+            SourceKind::Orca,
+        ]
+        .iter()
+        .map(|k| serde_json::to_string(k).unwrap())
+        .collect();
+        assert_eq!(names, ["\"direct\"", "\"antigravityApp\"", "\"orca\""]);
     }
 
     #[test]

@@ -2,5 +2,4 @@
 
 pub mod claude_direct;
 pub mod codex_direct;
-pub mod omp;
 pub mod orca;

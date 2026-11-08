@@ -42,13 +42,12 @@ No AI vendor publishes an official API for plan limits. Each source below is eit
 | Claude Code login file | `~/.claude/.credentials.json`, then `GET api.anthropic.com/api/oauth/usage` | The account signed in to Claude Code | On (unofficial endpoint) |
 | Codex login file | `~/.codex/auth.json`, then `GET chatgpt.com/backend-api/wham/usage` | The account signed in to the Codex CLI or the Codex app | On (unofficial endpoint) |
 | Orca | The output of `orca account list --json` | Claude and Codex accounts in Orca, and all Antigravity accounts in Orca | On, if Orca is installed |
-| OMP | `~/.omp/agent/agent.db`, read-only | Claude and Antigravity accounts signed in to OMP | On, if OMP is installed |
 
 If two sources report the same account, QuotaGlass shows one card. It uses the email address to match accounts. If a source gives no email address, QuotaGlass does not merge that account with another.
 
 You can turn off each source in **Settings > Sources**.
 
-When two or more sources read the same account, QuotaGlass picks one in this order: direct, Orca, OMP. To use a different source for one account, click its card and choose under **Source**. Choose **Auto** to go back to the normal order.
+When two or more sources read the same account, QuotaGlass picks one in this order: direct, then Orca.
 
 ## Accounts that QuotaGlass cannot read
 

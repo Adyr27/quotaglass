@@ -1,6 +1,5 @@
-//! `%APPDATA%\QuotaGlass\settings.json`: window, switches and per-account choices. No tokens, ever.
+//! `%APPDATA%\QuotaGlass\settings.json`: window and switches. No tokens, ever.
 
-use quotaglass_core::merge::Overrides;
 use quotaglass_core::Service;
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -20,7 +19,6 @@ pub struct WindowRect {
 pub struct Sources {
     pub direct: bool,
     pub orca: bool,
-    pub omp: bool,
 }
 
 impl Default for Sources {
@@ -28,7 +26,6 @@ impl Default for Sources {
         Self {
             direct: true,
             orca: true,
-            omp: true,
         }
     }
 }
@@ -43,7 +40,6 @@ pub struct Settings {
     pub autostart: bool,
     pub refresh_minutes: u8,
     pub sources: Sources,
-    pub overrides: Overrides,
     pub collapsed: Vec<Service>,
     pub hidden_services: Vec<Service>,
     pub first_run_done: bool,
@@ -59,7 +55,6 @@ impl Default for Settings {
             autostart: false,
             refresh_minutes: 2,
             sources: Sources::default(),
-            overrides: Overrides::default(),
             collapsed: Vec::new(),
             hidden_services: Vec::new(),
             first_run_done: false,
@@ -76,7 +71,6 @@ pub struct SettingsPatch {
     pub autostart: Option<bool>,
     pub refresh_minutes: Option<u8>,
     pub sources: Option<Sources>,
-    pub overrides: Option<Overrides>,
     pub collapsed: Option<Vec<Service>>,
     pub hidden_services: Option<Vec<Service>>,
     pub first_run_done: Option<bool>,
@@ -98,9 +92,6 @@ impl Settings {
         }
         if let Some(v) = patch.sources {
             self.sources = v;
-        }
-        if let Some(v) = patch.overrides {
-            self.overrides = v;
         }
         if let Some(v) = patch.collapsed {
             self.collapsed = v;
@@ -173,7 +164,6 @@ impl SettingsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quotaglass_core::SourceKind;
 
     fn temp_store(name: &str) -> (SettingsStore, PathBuf) {
         let dir = std::env::temp_dir().join(format!("qg-test-{}-{}", std::process::id(), name));
@@ -197,10 +187,7 @@ mod tests {
             collapsed: vec![Service::Codex],
             ..Default::default()
         };
-        s.sources.omp = false;
-        s.overrides
-            .pinned
-            .insert("claude:user@example.com".into(), SourceKind::Orca);
+        s.sources.orca = false;
         store.save(&s).unwrap();
 
         assert_eq!(store.load(), s);

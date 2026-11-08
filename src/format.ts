@@ -10,21 +10,19 @@ export const SERVICE_NAME: Record<Service, string> = {
   antigravity: "Antigravity",
 };
 
-export const SOURCE_ORDER: readonly SwitchableSource[] = ["direct", "orca", "omp"];
+export const SOURCE_ORDER: readonly SwitchableSource[] = ["direct", "orca"];
 
 /** Short source names for the meta line of a card. */
 const SOURCE_TAG: Record<SourceKind, string> = {
   direct: "direct (unofficial)",
+  antigravityApp: "Antigravity app",
   orca: "Orca",
-  omp: "OMP",
-  sessionKey: "session key",
 };
 
 /** Names for the rows of the Sources panel. */
 const SOURCE_ROW_NAME: Record<SwitchableSource, string> = {
   direct: "Claude Code and Codex login files",
   orca: "Orca",
-  omp: "OMP",
 };
 
 export function sourceTag(kind: SourceKind): string {

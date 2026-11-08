@@ -92,7 +92,7 @@ pub fn refresh_now(app: AppHandle) {
 #[tauri::command]
 pub fn detect_sources(app: AppHandle) -> Vec<SourceStatus> {
     let state = app.state::<AppState>();
-    let (direct, orca, omp) = state.scheduler.detected();
+    let (direct, orca) = state.scheduler.detected();
     let on = lock(&state.settings).sources;
     vec![
         SourceStatus {
@@ -105,12 +105,6 @@ pub fn detect_sources(app: AppHandle) -> Vec<SourceStatus> {
             kind: SourceKind::Orca,
             detected: orca,
             enabled: on.orca,
-            unofficial: false,
-        },
-        SourceStatus {
-            kind: SourceKind::Omp,
-            detected: omp,
-            enabled: on.omp,
             unofficial: false,
         },
     ]

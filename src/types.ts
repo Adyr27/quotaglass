@@ -2,11 +2,10 @@
 
 export type Service = "claude" | "codex" | "antigravity";
 
-/** "sessionKey" is not built yet. It stays here only so a card can label a reading that carries it. */
-export type SourceKind = "direct" | "orca" | "omp" | "sessionKey";
+export type SourceKind = "direct" | "antigravityApp" | "orca";
 
 /** The sources a person can switch on or off in the Sources rows. */
-export type SwitchableSource = "direct" | "orca" | "omp";
+export type SwitchableSource = "direct" | "orca";
 
 export type Freshness = "live" | "aged" | "stale";
 
@@ -27,7 +26,7 @@ export interface AccountView {
   label: string;
   plan: string | null;
   source: SourceKind | null;
-  /** Every source with a reading for this account, in priority order. */
+  /** Every source with a reading for this account, in display order. */
   sources: SourceKind[];
   freshness: Freshness;
   ageSecs: number | null;
@@ -61,10 +60,6 @@ export interface Settings {
   autostart: boolean;
   refreshMinutes: number;
   sources: SourceSwitches;
-  overrides: {
-    pinned: Record<string, SourceKind>;
-    disabled: Record<string, SourceKind[]>;
-  };
   collapsed: Service[];
   hiddenServices: Service[];
   firstRunDone: boolean;
@@ -78,7 +73,6 @@ export type SettingsPatch = Partial<
     | "autostart"
     | "refreshMinutes"
     | "sources"
-    | "overrides"
     | "collapsed"
     | "hiddenServices"
     | "firstRunDone"

@@ -4,21 +4,12 @@ use crate::freshness::classify;
 use crate::model::{FetchError, Reading, Service, SourceKind};
 use crate::provider::SourceOutcome;
 use crate::view::{AccountView, BucketView, CardState, Freshness};
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 const ANTIGRAVITY_HINT: &str =
     "Sign in with agy, then add the account in Orca Settings > AI Provider Accounts.";
 /// Readings from two sources describe the same window when their reset times are this close.
 const SAME_RESET_MS: i64 = 60_000;
-
-/// Per-account choices from settings, keyed by `AccountKey::store_key()` ("claude:user@example.com").
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Overrides {
-    pub pinned: HashMap<String, SourceKind>,
-    pub disabled: HashMap<String, Vec<SourceKind>>,
-}
 
 /// Last successful reading per account and source. Memory only; sources refill it after a restart.
 #[derive(Debug, Default)]
@@ -38,7 +29,6 @@ impl LastReadings {
 pub fn build(
     outcomes: &[SourceOutcome],
     last: &mut LastReadings,
-    overrides: &Overrides,
     connectable: &[Service],
     refresh_secs: u64,
     now_ms: i64,
@@ -69,15 +59,6 @@ pub fn build(
 
     let mut cards: Vec<AccountView> = Vec::new();
     for (id, per_source) in &last.0 {
-        let disabled = overrides.disabled.get(id).map(Vec::as_slice).unwrap_or(&[]);
-        // A pin to a source that no longer knows this account is ignored; otherwise the card (and the only way
-        // to clear the pin) would disappear.
-        let pinned = overrides
-            .pinned
-            .get(id)
-            .copied()
-            .filter(|p| per_source.contains_key(p));
-        let allowed = |k: &SourceKind| !disabled.contains(k) && pinned.is_none_or(|p| p == *k);
         let live_here = live.get(id).map(Vec::as_slice).unwrap_or(&[]);
 
         // A source that answered this cycle wins over stored readings. Among them, one with numbers beats one
@@ -85,15 +66,13 @@ pub fn build(
         // keeps the first of equal keys, and the map iterates in priority order.
         let chosen = per_source
             .iter()
-            .filter(|(k, _)| allowed(k) && live_here.contains(k))
+            .filter(|(k, _)| live_here.contains(k))
             .map(|(_, r)| r)
             .min_by_key(|r| r.buckets.is_empty())
             .map(|r| (r, true))
             .or_else(|| {
                 per_source
-                    .iter()
-                    .filter(|(k, _)| allowed(k))
-                    .map(|(_, r)| r)
+                    .values()
                     .max_by_key(|r| (!r.buckets.is_empty(), r.observed_at_ms))
                     .map(|r| (r, false))
             });
@@ -301,19 +280,8 @@ mod tests {
         }
     }
 
-    fn run(
-        outcomes: &[SourceOutcome],
-        last: &mut LastReadings,
-        ov: &Overrides,
-    ) -> Vec<AccountView> {
-        build(
-            outcomes,
-            last,
-            ov,
-            &[Service::Claude, Service::Codex],
-            120,
-            NOW,
-        )
+    fn run(outcomes: &[SourceOutcome], last: &mut LastReadings) -> Vec<AccountView> {
+        build(outcomes, last, &[Service::Claude, Service::Codex], 120, NOW)
     }
 
     const E: Option<&str> = Some("user@example.com");
@@ -339,7 +307,6 @@ mod tests {
                 ),
             ],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].source, Some(SourceKind::Direct));
@@ -361,7 +328,6 @@ mod tests {
                 )],
             )],
             &mut last,
-            &Overrides::default(),
         );
         let cards = run(
             &[
@@ -376,94 +342,10 @@ mod tests {
                 ),
             ],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].source, Some(SourceKind::Orca));
         assert_eq!(cards[0].state, CardState::Ok);
-    }
-
-    #[test]
-    fn pinned_source_overrides_priority() {
-        let mut last = LastReadings::default();
-        let mut ov = Overrides::default();
-        ov.pinned
-            .insert("claude:user@example.com".into(), SourceKind::Orca);
-        let cards = run(
-            &[
-                ok(
-                    SourceKind::Direct,
-                    vec![reading(
-                        Service::Claude,
-                        E,
-                        "d",
-                        SourceKind::Direct,
-                        &[10.0],
-                    )],
-                ),
-                ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Claude, E, "o", SourceKind::Orca, &[50.0])],
-                ),
-            ],
-            &mut last,
-            &ov,
-        );
-        assert_eq!(cards[0].source, Some(SourceKind::Orca));
-        assert_eq!(cards[0].sources, vec![SourceKind::Direct, SourceKind::Orca]);
-    }
-
-    #[test]
-    fn pin_to_a_source_without_this_account_is_ignored() {
-        let mut last = LastReadings::default();
-        let mut ov = Overrides::default();
-        ov.pinned
-            .insert("claude:user@example.com".into(), SourceKind::Omp);
-        let cards = run(
-            &[ok(
-                SourceKind::Direct,
-                vec![reading(
-                    Service::Claude,
-                    E,
-                    "d",
-                    SourceKind::Direct,
-                    &[10.0],
-                )],
-            )],
-            &mut last,
-            &ov,
-        );
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::Direct));
-    }
-
-    #[test]
-    fn disabled_source_ignored() {
-        let mut last = LastReadings::default();
-        let mut ov = Overrides::default();
-        ov.disabled
-            .insert("claude:user@example.com".into(), vec![SourceKind::Direct]);
-        let cards = run(
-            &[
-                ok(
-                    SourceKind::Direct,
-                    vec![reading(
-                        Service::Claude,
-                        E,
-                        "d",
-                        SourceKind::Direct,
-                        &[10.0],
-                    )],
-                ),
-                ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Claude, E, "o", SourceKind::Orca, &[50.0])],
-                ),
-            ],
-            &mut last,
-            &ov,
-        );
-        assert_eq!(cards[0].source, Some(SourceKind::Orca));
     }
 
     #[test]
@@ -487,7 +369,6 @@ mod tests {
                 ),
             ],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards.len(), 2);
     }
@@ -513,7 +394,6 @@ mod tests {
                 ),
             ],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards.len(), 1);
     }
@@ -524,11 +404,7 @@ mod tests {
         let mut direct = reading(Service::Codex, E, "d", SourceKind::Direct, &[52.0]);
         direct.buckets[0].window_secs = Some(2_592_000);
         direct.buckets[0].name = "30 days".into();
-        run(
-            &[ok(SourceKind::Direct, vec![direct])],
-            &mut last,
-            &Overrides::default(),
-        );
+        run(&[ok(SourceKind::Direct, vec![direct])], &mut last);
         let cards = run(
             &[
                 err(
@@ -542,7 +418,6 @@ mod tests {
                 ),
             ],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards[0].source, Some(SourceKind::Orca));
         assert_eq!(cards[0].buckets[0].window_secs, Some(2_592_000));
@@ -564,7 +439,6 @@ mod tests {
                 )],
             )],
             &mut last,
-            &Overrides::default(),
         );
         let h = cards[0].headline.as_ref().unwrap();
         assert_eq!(h.used_percent, 100.0);
@@ -577,11 +451,7 @@ mod tests {
         let mut last = LastReadings::default();
         let mut r = reading(Service::Claude, E, "d", SourceKind::Direct, &[90.0, 20.0]);
         r.buckets[0].resets_at_ms = Some(NOW - 1);
-        let cards = run(
-            &[ok(SourceKind::Direct, vec![r])],
-            &mut last,
-            &Overrides::default(),
-        );
+        let cards = run(&[ok(SourceKind::Direct, vec![r])], &mut last);
         assert_eq!(cards[0].headline.as_ref().unwrap().used_percent, 20.0);
         assert_eq!(cards[0].freshness, Freshness::Live);
     }
@@ -592,25 +462,18 @@ mod tests {
         let cards = run(
             &[
                 ok(
-                    SourceKind::Orca,
-                    vec![reading(Service::Antigravity, E, "o", SourceKind::Orca, &[])],
+                    SourceKind::Direct,
+                    vec![reading(Service::Claude, E, "d", SourceKind::Direct, &[])],
                 ),
                 ok(
-                    SourceKind::Omp,
-                    vec![reading(
-                        Service::Antigravity,
-                        E,
-                        "m",
-                        SourceKind::Omp,
-                        &[40.0],
-                    )],
+                    SourceKind::Orca,
+                    vec![reading(Service::Claude, E, "o", SourceKind::Orca, &[40.0])],
                 ),
             ],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::Omp));
+        assert_eq!(cards[0].source, Some(SourceKind::Orca));
         assert_eq!(cards[0].state, CardState::Ok);
     }
 
@@ -624,17 +487,16 @@ mod tests {
                     vec![reading(Service::Codex, E, "o", SourceKind::Orca, &[5.0])],
                 ),
                 ok(
-                    SourceKind::Omp,
-                    vec![reading(Service::Claude, E, "m", SourceKind::Omp, &[7.0])],
+                    SourceKind::Direct,
+                    vec![reading(Service::Claude, E, "d", SourceKind::Direct, &[7.0])],
                 ),
             ],
             &mut last,
-            &Overrides::default(),
         );
         last.forget(SourceKind::Orca, None);
-        let cards = run(&[], &mut last, &Overrides::default());
+        let cards = run(&[], &mut last);
         assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].source, Some(SourceKind::Omp));
+        assert_eq!(cards[0].source, Some(SourceKind::Direct));
     }
 
     #[test]
@@ -652,12 +514,10 @@ mod tests {
                 )],
             )],
             &mut last,
-            &Overrides::default(),
         );
         let cards = run(
             &[err(SourceKind::Orca, None, FetchError::Timeout)],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].state, CardState::Error);
@@ -683,13 +543,8 @@ mod tests {
                 )],
             )],
             &mut last,
-            &Overrides::default(),
         );
-        let cards = run(
-            &[ok(SourceKind::Orca, vec![])],
-            &mut last,
-            &Overrides::default(),
-        );
+        let cards = run(&[ok(SourceKind::Orca, vec![])], &mut last);
         assert!(cards.is_empty());
     }
 
@@ -702,7 +557,6 @@ mod tests {
                 vec![reading(Service::Antigravity, E, "o", SourceKind::Orca, &[])],
             )],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards[0].state, CardState::NoReadingYet);
         assert_eq!(cards[0].reason.as_deref(), Some(ANTIGRAVITY_HINT));
@@ -719,7 +573,6 @@ mod tests {
                 FetchError::Expired,
             )],
             &mut last,
-            &Overrides::default(),
         );
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].state, CardState::NoSource);
@@ -737,7 +590,6 @@ mod tests {
                 FetchError::NotDetected,
             )],
             &mut last,
-            &Overrides::default(),
         );
         assert!(cards.is_empty());
     }

@@ -16,7 +16,6 @@ pub struct Env {
     pub home: PathBuf,
     pub claude_dir: PathBuf,
     pub codex_dir: PathBuf,
-    pub omp_db: PathBuf,
     pub path_dirs: Vec<PathBuf>,
     pub http: HttpClient,
     pub now_ms: fn() -> i64,
@@ -28,7 +27,6 @@ pub struct Paths {
     pub home: PathBuf,
     pub claude_dir: PathBuf,
     pub codex_dir: PathBuf,
-    pub omp_db: PathBuf,
     pub path_dirs: Vec<PathBuf>,
 }
 
@@ -44,7 +42,6 @@ impl Paths {
         let codex_dir = get("CODEX_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".codex"));
-        let omp_db = home.join(".omp").join("agent").join("agent.db");
         let path_dirs = get("PATH")
             .map(|p| std::env::split_paths(&p).collect())
             .unwrap_or_default();
@@ -52,7 +49,6 @@ impl Paths {
             home,
             claude_dir,
             codex_dir,
-            omp_db,
             path_dirs,
         })
     }
@@ -65,7 +61,6 @@ impl Env {
             home: p.home,
             claude_dir: p.claude_dir,
             codex_dir: p.codex_dir,
-            omp_db: p.omp_db,
             path_dirs: p.path_dirs,
             http: HttpClient::new()?,
             now_ms: system_now_ms,
@@ -94,7 +89,6 @@ pub(crate) fn test_env(home: &Path, http: HttpClient, now_ms: fn() -> i64) -> En
         home: home.to_path_buf(),
         claude_dir: home.join(".claude"),
         codex_dir: home.join(".codex"),
-        omp_db: home.join(".omp").join("agent").join("agent.db"),
         path_dirs: vec![],
         http,
         now_ms,
@@ -116,13 +110,6 @@ mod tests {
         .unwrap();
         assert_eq!(p.codex_dir, PathBuf::from("D:/codex"));
         assert_eq!(p.claude_dir, PathBuf::from("D:/claude"));
-        assert_eq!(
-            p.omp_db,
-            PathBuf::from("C:/u")
-                .join(".omp")
-                .join("agent")
-                .join("agent.db")
-        );
     }
 
     #[test]

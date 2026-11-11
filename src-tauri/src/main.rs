@@ -38,7 +38,6 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_notification::init())
-        // The config windows exist before `setup` runs, so state that commands read must be managed here.
         .manage(window::WindowState::default())
         .manage(flyout::FlyoutState::default())
         .setup(|app| {
@@ -77,6 +76,11 @@ fn main() {
                 scheduler,
                 acrylic: AtomicBool::new(true),
             });
+            // The windows have `create: false`: built only now, so no page can call a command before its state is managed.
+            // The release build loads the page from memory fast enough to win that race (`state() called before manage()`).
+            for config in &app.config().app.windows {
+                tauri::WebviewWindowBuilder::from_config(app.handle(), config)?.build()?;
+            }
             window::setup(app.handle())?;
             flyout::setup(app.handle());
             tray::build(app.handle())?;
@@ -111,4 +115,31 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running QuotaGlass");
+}
+
+#[cfg(test)]
+mod tests {
+    /// Tauri builds `create: true` windows before `setup`. Every window must be built in `setup`, after the last
+    /// `manage`, or a command from its page can panic the release build.
+    #[test]
+    fn windows_are_built_after_state_is_managed() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let windows = conf["app"]["windows"].as_array().unwrap();
+        assert_eq!(windows.len(), 2);
+        for w in windows {
+            assert_eq!(w["create"], false, "{}", w["label"]);
+        }
+
+        // Only the code above this test module counts; the strings below appear in it too.
+        let code = &include_str!("main.rs")[..include_str!("main.rs").find("mod tests").unwrap()];
+        let built = code.find("WebviewWindowBuilder::from_config").unwrap();
+        let last_manage = code.rfind("app.manage(").unwrap();
+        let window_setup = code.find("window::setup(app.handle())").unwrap();
+        assert!(
+            last_manage < built,
+            "a window is built before the last manage"
+        );
+        assert!(built < window_setup, "window::setup needs the windows");
+    }
 }

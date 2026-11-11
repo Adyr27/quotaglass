@@ -14,6 +14,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "QuotaGlass",
         "width": 104,
         "height": 32,
@@ -26,6 +27,7 @@
       },
       {
         "label": "flyout",
+        "create": false,
         "title": "QuotaGlass",
         "url": "index.html?view=flyout",
         "width": 340,

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-pill-scale"
+description = "Enables the set_pill_scale command without any pre-configured scope."
+commands.allow = ["set_pill_scale"]
+
+[[permission]]
+identifier = "deny-set-pill-scale"
+description = "Denies the set_pill_scale command without any pre-configured scope."
+commands.deny = ["set_pill_scale"]

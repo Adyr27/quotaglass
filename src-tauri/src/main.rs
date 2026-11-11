@@ -3,14 +3,17 @@
 
 mod commands;
 mod connect;
+mod flyout;
 mod notify;
+mod reset_notify;
 mod scheduler;
 mod settings;
+mod topmost;
 mod tray;
 mod window;
 
 use commands::AppState;
-use notify::{WarnStore, Warnings};
+use notify::{JsonStore, Warnings};
 use quotaglass_core::Env;
 use scheduler::Scheduler;
 use settings::SettingsStore;
@@ -35,6 +38,9 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_notification::init())
+        // The config windows exist before `setup` runs, so state that commands read must be managed here.
+        .manage(window::WindowState::default())
+        .manage(flyout::FlyoutState::default())
         .setup(|app| {
             let path = SettingsStore::default_path().ok_or("APPDATA is not set")?;
             let store = SettingsStore::new(path);
@@ -44,17 +50,25 @@ fn main() {
                 settings.autostart = enabled;
             }
 
-            let warn_store = WarnStore::new(WarnStore::default_path().ok_or("APPDATA is not set")?);
+            let warn_store =
+                JsonStore::new(JsonStore::in_appdata("warnings.json").ok_or("APPDATA is not set")?);
             app.manage(Warnings {
                 state: Mutex::new(warn_store.load()),
                 store: warn_store,
             });
+            let reset_store =
+                JsonStore::new(JsonStore::in_appdata("resets.json").ok_or("APPDATA is not set")?);
+            app.manage(reset_notify::Resets::new(
+                reset_store,
+                settings.reset_toasts.clone(),
+            ));
 
             let handle = app.handle().clone();
             let env = Env::from_system().map_err(|e| format!("Cannot start: {e:?}"))?;
             let scheduler = Scheduler::new(env, move |snapshot| {
                 let _ = handle.emit("snapshot", snapshot);
                 notify::on_snapshot(&handle, &handle.state::<Warnings>(), snapshot);
+                reset_notify::on_snapshot(&handle, snapshot);
             });
 
             app.manage(AppState {
@@ -64,7 +78,10 @@ fn main() {
                 acrylic: AtomicBool::new(true),
             });
             window::setup(app.handle())?;
+            flyout::setup(app.handle());
             tray::build(app.handle())?;
+            reset_notify::start(app.handle());
+            topmost::start(app.handle());
             app.state::<AppState>().scheduler.apply(&settings);
             Ok(())
         })
@@ -79,12 +96,18 @@ fn main() {
             commands::open_cli,
             commands::remove_account,
             commands::set_hidden,
-            commands::set_pinned,
             commands::set_label,
             commands::connect_source,
             commands::open_url,
-            commands::set_panel_open,
             commands::set_zoom,
+            commands::set_pill_scale,
+            commands::set_pill_slots,
+            commands::set_pill_locked,
+            commands::flyout_hover,
+            commands::flyout_pointer,
+            commands::flyout_open_popover,
+            commands::flyout_close,
+            commands::flyout_size,
         ])
         .run(tauri::generate_context!())
         .expect("error while running QuotaGlass");

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-pill-locked"
+description = "Enables the set_pill_locked command without any pre-configured scope."
+commands.allow = ["set_pill_locked"]
+
+[[permission]]
+identifier = "deny-set-pill-locked"
+description = "Denies the set_pill_locked command without any pre-configured scope."
+commands.deny = ["set_pill_locked"]

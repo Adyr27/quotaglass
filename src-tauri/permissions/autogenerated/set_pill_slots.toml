@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-pill-slots"
+description = "Enables the set_pill_slots command without any pre-configured scope."
+commands.allow = ["set_pill_slots"]
+
+[[permission]]
+identifier = "deny-set-pill-slots"
+description = "Denies the set_pill_slots command without any pre-configured scope."
+commands.deny = ["set_pill_slots"]

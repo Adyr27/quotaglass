@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
 
-pub const SETTINGS_VERSION: u32 = 2;
-pub const MAX_PINNED: usize = 4;
+pub const SETTINGS_VERSION: u32 = 3;
+/// The pill's smallest and largest scale.
+pub const PILL_SCALE: (f64, f64) = (0.65, 1.6);
 const MAX_LABEL_CHARS: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,17 +20,13 @@ pub struct WindowRect {
     pub height: u32,
 }
 
-/// The pill's narrowest and widest width, in CSS px.
-pub const PILL_WIDTH: (u32, u32) = (320, 960);
-
-/// The smallest panel the layout holds, in CSS px.
-pub const PANEL_MIN: (u32, u32) = (440, 344);
-
-/// The panel's size in CSS px, as the person last left it. Multiplied by the UI zoom for the window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PanelSize {
-    pub width: u32,
-    pub height: u32,
+/// Clamps a scale into `PILL_SCALE`; a non-finite value (untrusted input) becomes 1.0.
+pub fn clamp_scale(scale: f64) -> f64 {
+    if scale.is_finite() {
+        scale.clamp(PILL_SCALE.0, PILL_SCALE.1)
+    } else {
+        1.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +45,38 @@ pub enum Material {
     Acrylic,
     Mica,
     Clear,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToastSound {
+    /// The Windows default notification sound.
+    #[default]
+    Default,
+    Silent,
+}
+
+/// A reminder toast when a limit window resets. The master switch is off until the user turns it on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResetToasts {
+    pub enabled: bool,
+    pub claude: bool,
+    pub codex: bool,
+    pub antigravity: bool,
+    pub sound: ToastSound,
+}
+
+impl Default for ResetToasts {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            claude: true,
+            codex: true,
+            antigravity: true,
+            sound: ToastSound::Default,
+        }
+    }
 }
 
 /// A one-click source the user switched on.
@@ -73,9 +102,6 @@ pub struct AddedAccount {
 pub struct Settings {
     pub version: u32,
     pub pill_position: Option<WindowRect>,
-    pub panel_size: Option<PanelSize>,
-    /// The pill's width in CSS px; its height is fixed.
-    pub pill_width: Option<u32>,
     pub always_on_top: bool,
     pub autostart: bool,
     pub refresh_minutes: u8,
@@ -83,11 +109,14 @@ pub struct Settings {
     pub material: Material,
     pub connected: Vec<Connection>,
     pub added_accounts: Vec<AddedAccount>,
-    /// Account IDs, in display order, at most 4.
-    pub pinned_accounts: Vec<String>,
     pub hidden_accounts: Vec<String>,
     /// Account ID to label, at most 40 characters each.
     pub labels: BTreeMap<String, String>,
+    /// The pill's size factor, within `PILL_SCALE`.
+    pub pill_scale: f64,
+    /// The window lock ("Pin pill"): no drag, no resize, and the rect is the home restored at launch.
+    pub pill_locked: bool,
+    pub reset_toasts: ResetToasts,
 }
 
 impl Default for Settings {
@@ -95,8 +124,6 @@ impl Default for Settings {
         Self {
             version: SETTINGS_VERSION,
             pill_position: None,
-            panel_size: None,
-            pill_width: None,
             always_on_top: true,
             autostart: false,
             refresh_minutes: 2,
@@ -104,15 +131,17 @@ impl Default for Settings {
             material: Material::default(),
             connected: Vec::new(),
             added_accounts: Vec::new(),
-            pinned_accounts: Vec::new(),
             hidden_accounts: Vec::new(),
             labels: BTreeMap::new(),
+            pill_scale: 1.0,
+            pill_locked: false,
+            reset_toasts: ResetToasts::default(),
         }
     }
 }
 
-/// Everything the UI may change. Added accounts belong to the account commands, the window rect belongs
-/// to the app, and the version is fixed.
+/// Everything the UI may change. Added accounts belong to the account commands; the window rect, scale and
+/// lock belong to the pill commands; the version is fixed.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatch {
@@ -122,9 +151,9 @@ pub struct SettingsPatch {
     pub theme: Option<Theme>,
     pub material: Option<Material>,
     pub connected: Option<Vec<Connection>>,
-    pub pinned_accounts: Option<Vec<String>>,
     pub hidden_accounts: Option<Vec<String>>,
     pub labels: Option<BTreeMap<String, String>>,
+    pub reset_toasts: Option<ResetToasts>,
 }
 
 impl Settings {
@@ -147,30 +176,16 @@ impl Settings {
         if let Some(v) = patch.connected {
             self.connected = v;
         }
-        if let Some(v) = patch.pinned_accounts {
-            self.pinned_accounts = v;
-        }
         if let Some(v) = patch.hidden_accounts {
             self.hidden_accounts = v;
         }
         if let Some(v) = patch.labels {
             self.labels = v;
         }
-        self.clamp();
-    }
-
-    /// Pins or unpins one card. Pinning a fifth card is refused; unpinning is always allowed.
-    pub fn set_pinned(&mut self, account_id: &str, pinned: bool) -> Result<(), &'static str> {
-        let has = self.pinned_accounts.iter().any(|p| p == account_id);
-        if !pinned {
-            self.pinned_accounts.retain(|p| p != account_id);
-        } else if !has {
-            if self.pinned_accounts.len() >= MAX_PINNED {
-                return Err("Pin up to 4 accounts");
-            }
-            self.pinned_accounts.push(account_id.to_string());
+        if let Some(v) = patch.reset_toasts {
+            self.reset_toasts = v;
         }
-        Ok(())
+        self.clamp();
     }
 
     pub fn set_hidden(&mut self, account_id: &str, hidden: bool) {
@@ -199,7 +214,7 @@ impl Settings {
         }
     }
 
-    /// Drops an added account. `forget_card` also drops the card's pin, hidden flag and label: false when the card
+    /// Drops an added account. `forget_card` also drops the card's hidden flag and label: false when the card
     /// stays on screen through the current login.
     pub fn forget_added(&mut self, profile_id: &str, account_id: &str, forget_card: bool) {
         self.added_accounts.retain(|a| a.id != profile_id);
@@ -207,7 +222,6 @@ impl Settings {
         if forget_card {
             ids.push(account_id);
         }
-        self.pinned_accounts.retain(|p| !ids.contains(&p.as_str()));
         self.hidden_accounts.retain(|h| !ids.contains(&h.as_str()));
         self.labels.retain(|k, _| !ids.contains(&k.as_str()));
     }
@@ -215,22 +229,7 @@ impl Settings {
     pub(crate) fn clamp(&mut self) {
         self.version = SETTINGS_VERSION;
         self.refresh_minutes = self.refresh_minutes.clamp(1, 5);
-        if let Some(w) = &mut self.pill_width {
-            *w = (*w).clamp(PILL_WIDTH.0, PILL_WIDTH.1);
-        }
-        if let Some(size) = &mut self.panel_size {
-            size.width = size.width.clamp(PANEL_MIN.0, 4000);
-            size.height = size.height.clamp(PANEL_MIN.1, 4000);
-        }
-
-        let mut seen = Vec::with_capacity(MAX_PINNED);
-        self.pinned_accounts.retain(|id| {
-            if seen.len() == MAX_PINNED || seen.contains(id) {
-                return false;
-            }
-            seen.push(id.clone());
-            true
-        });
+        self.pill_scale = clamp_scale(self.pill_scale);
 
         let mut hidden = Vec::with_capacity(self.hidden_accounts.len());
         for id in self.hidden_accounts.drain(..) {
@@ -308,7 +307,8 @@ impl SettingsStore {
             .map(|a| PathBuf::from(a).join("QuotaGlass").join("settings.json"))
     }
 
-    /// Missing or unreadable file gives defaults. A v1 file is migrated in memory; nothing is written here.
+    /// Missing or unreadable file gives defaults. A v1 or v2 file is migrated in memory; nothing is written here.
+    /// A v2 file parses as v3: its dropped keys (`pinnedAccounts`) are ignored and the new keys take defaults.
     /// A file that does not parse, or has an unknown version, is kept as `settings.json.bad`.
     pub fn load(&self) -> Settings {
         let Ok(raw) = std::fs::read(&self.path) else {
@@ -322,7 +322,7 @@ impl SettingsStore {
         }
         let mut settings = match value.get("version").map(serde_json::Value::as_u64) {
             None | Some(Some(1)) => migrate_v1(&value),
-            Some(Some(2)) => {
+            Some(Some(2 | 3)) => {
                 match serde_json::from_value::<Settings>(drop_unknown_sources(value)) {
                     Ok(s) => s,
                     Err(_) => return self.quarantine(),
@@ -374,39 +374,6 @@ mod tests {
     }
 
     #[test]
-    fn panel_size_round_trips_and_clamps() {
-        let s: Settings =
-            serde_json::from_str(r#"{"version":2,"panelSize":{"width":600,"height":450}}"#)
-                .unwrap();
-        assert_eq!(
-            s.panel_size,
-            Some(PanelSize {
-                width: 600,
-                height: 450
-            })
-        );
-        let old: Settings = serde_json::from_str(r#"{"version":2}"#).unwrap();
-        assert_eq!(old.panel_size, None);
-        let mut tiny = Settings {
-            panel_size: Some(PanelSize {
-                width: 10,
-                height: 10,
-            }),
-            pill_width: Some(10),
-            ..Settings::default()
-        };
-        tiny.clamp();
-        assert_eq!(
-            tiny.panel_size,
-            Some(PanelSize {
-                width: 440,
-                height: 344
-            })
-        );
-        assert_eq!(tiny.pill_width, Some(PILL_WIDTH.0));
-    }
-
-    #[test]
     fn unknown_source_is_dropped_not_quarantined() {
         let (store, dir) = temp_store("retired");
         let v2 = serde_json::json!({
@@ -444,7 +411,7 @@ mod tests {
         write_file(&dir, &serde_json::to_vec(&v1).unwrap());
 
         let s = store.load();
-        assert_eq!(s.version, 2);
+        assert_eq!(s.version, 3);
         assert_eq!(
             s.pill_position,
             Some(WindowRect {
@@ -471,7 +438,7 @@ mod tests {
         let (store, dir) = temp_store("v1-noversion");
         write_file(&dir, br#"{"refreshMinutes":3,"sources":{"direct":false}}"#);
         let s = store.load();
-        assert_eq!(s.version, 2);
+        assert_eq!(s.version, 3);
         assert_eq!(s.refresh_minutes, 3);
         assert_eq!(s.pill_position, None);
         assert!(!s.autostart, "autostart defaults to off");
@@ -500,26 +467,6 @@ mod tests {
     }
 
     #[test]
-    fn pin_limit_enforced() {
-        let mut s = Settings::default();
-        for id in ["a", "b", "c", "d"] {
-            s.set_pinned(id, true).unwrap();
-        }
-        assert_eq!(s.set_pinned("e", true), Err("Pin up to 4 accounts"));
-        assert_eq!(
-            s.set_pinned("a", true),
-            Ok(()),
-            "pinning a pinned card is a no-op"
-        );
-        assert_eq!(s.pinned_accounts, ["a", "b", "c", "d"]);
-        s.set_pinned("b", false).unwrap();
-        s.set_pinned("e", true).unwrap();
-        assert_eq!(s.pinned_accounts, ["a", "c", "d", "e"]);
-        s.set_pinned("zz", false).unwrap();
-        assert_eq!(s.pinned_accounts.len(), 4);
-    }
-
-    #[test]
     fn hidden_label_connected_and_forget() {
         let mut s = Settings::default();
         s.set_hidden("x", true);
@@ -539,28 +486,20 @@ mod tests {
             service: Service::Claude,
             profile_dir: PathBuf::from(r"C:\p\p1"),
         });
-        s.pinned_accounts = vec!["x".into(), "p1".into()];
+        s.hidden_accounts = vec!["x".into(), "p1".into()];
         s.forget_added("p1", "x", false);
         assert!(s.added_accounts.is_empty());
-        assert_eq!(s.pinned_accounts, ["x"], "the card stays: keep its pin");
+        assert_eq!(
+            s.hidden_accounts,
+            ["x"],
+            "the card stays: keep its hidden flag"
+        );
         assert_eq!(s.labels.get("x").map(String::as_str), Some("Work"));
         s.forget_added("p1", "x", true);
-        assert!(
-            s.pinned_accounts.is_empty() && s.hidden_accounts.is_empty() && s.labels.is_empty()
-        );
+        assert!(s.hidden_accounts.is_empty() && s.labels.is_empty());
         s.set_label("x", Some("A".into()));
         s.set_label("x", None);
         assert!(s.labels.is_empty());
-    }
-
-    #[test]
-    fn pins_capped_at_four() {
-        let mut s = Settings::default();
-        s.apply(SettingsPatch {
-            pinned_accounts: Some(["a", "b", "a", "c", "d", "e"].map(String::from).to_vec()),
-            ..Default::default()
-        });
-        assert_eq!(s.pinned_accounts, ["a", "b", "c", "d"]);
     }
 
     #[test]
@@ -591,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_v2() {
+    fn round_trip_v3() {
         let (store, dir) = temp_store("roundtrip");
         assert_eq!(store.load(), Settings::default());
 
@@ -602,8 +541,6 @@ mod tests {
                 width: 360,
                 height: 520,
             }),
-            panel_size: None,
-            pill_width: None,
             always_on_top: false,
             autostart: true,
             refresh_minutes: 4,
@@ -615,8 +552,15 @@ mod tests {
                 service: Service::Codex,
                 profile_dir: PathBuf::from(r"C:\profiles\acct-1"),
             }],
-            pinned_accounts: vec!["acct-1".into()],
             hidden_accounts: vec!["acct-2".into()],
+            pill_scale: 0.8,
+            pill_locked: true,
+            reset_toasts: ResetToasts {
+                enabled: true,
+                codex: false,
+                sound: ToastSound::Silent,
+                ..ResetToasts::default()
+            },
             labels: BTreeMap::from([("acct-1".to_string(), "Work".to_string())]),
             ..Default::default()
         };
@@ -630,6 +574,89 @@ mod tests {
         let text = std::fs::read_to_string(dir.join("settings.json")).unwrap();
         assert!(text.contains(r#""claudeCurrent""#));
         assert!(text.contains(r#""pillPosition""#));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn v2_file_migrates_and_drops_pins() {
+        let (store, dir) = temp_store("v2-migrate");
+        let v2 = serde_json::json!({
+            "version": 2,
+            "pillPosition": { "x": 100, "y": 200, "width": 440, "height": 44 },
+            "pillWidth": 500,
+            "panelSize": { "width": 600, "height": 450 },
+            "alwaysOnTop": false,
+            "autostart": true,
+            "refreshMinutes": 4,
+            "theme": "dark",
+            "material": "mica",
+            "connected": ["claudeCurrent"],
+            "addedAccounts": [{ "id": "p1", "service": "codex", "profileDir": "C:/x/p1" }],
+            "pinnedAccounts": ["claude:a", "p1"],
+            "hiddenAccounts": ["claude:b"],
+            "labels": { "p1": "Work" }
+        });
+        write_file(&dir, &serde_json::to_vec(&v2).unwrap());
+        let s = store.load();
+        assert_eq!(s.version, 3);
+        assert_eq!(s.pill_position.map(|r| (r.x, r.y)), Some((100, 200)));
+        assert!(!s.always_on_top && s.autostart);
+        assert_eq!(s.refresh_minutes, 4);
+        assert_eq!((s.theme, s.material), (Theme::Dark, Material::Mica));
+        assert_eq!(s.connected, [Connection::ClaudeCurrent]);
+        assert_eq!(s.added_accounts.len(), 1);
+        assert_eq!(s.hidden_accounts, ["claude:b"]);
+        assert_eq!(s.labels.get("p1").map(String::as_str), Some("Work"));
+        assert_eq!(s.pill_scale, 1.0);
+        assert!(!s.pill_locked);
+        assert_eq!(s.reset_toasts, ResetToasts::default());
+        let saved = serde_json::to_string(&s).unwrap();
+        assert!(!saved.contains("pinned"), "the per-account pin is gone");
+        assert!(
+            !saved.contains("pillWidth") && !saved.contains("panelSize"),
+            "panel-mode sizes are dropped"
+        );
+        assert!(!dir.join("settings.json.bad").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pill_scale_is_clamped() {
+        for (input, want) in [(0.1, 0.65), (9.0, 1.6), (1.2, 1.2), (f64::NAN, 1.0)] {
+            let mut s = Settings {
+                pill_scale: input,
+                ..Settings::default()
+            };
+            s.clamp();
+            assert_eq!(s.pill_scale, want, "input {input}");
+        }
+    }
+
+    #[test]
+    fn reset_toasts_defaults_off() {
+        let s = Settings::default();
+        assert!(!s.reset_toasts.enabled, "the master switch starts off");
+        assert!(s.reset_toasts.claude && s.reset_toasts.codex && s.reset_toasts.antigravity);
+        assert_eq!(s.reset_toasts.sound, ToastSound::Default);
+        let partial: ResetToasts = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+        assert!(partial.enabled && partial.claude);
+        assert_eq!(
+            serde_json::to_value(ToastSound::Silent).unwrap(),
+            serde_json::json!("silent")
+        );
+    }
+
+    #[test]
+    fn unknown_future_keys_are_ignored() {
+        let (store, dir) = temp_store("future-keys");
+        write_file(
+            &dir,
+            br#"{"version":3,"refreshMinutes":3,"someLaterKey":{"a":1},"resetToasts":{"enabled":true,"newField":2}}"#,
+        );
+        let s = store.load();
+        assert_eq!(s.refresh_minutes, 3);
+        assert!(s.reset_toasts.enabled);
+        assert!(!dir.join("settings.json.bad").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -649,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_json_has_no_secret_fields() {
+    fn settings_never_contain_secret_fields() {
         fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
             match v {
                 serde_json::Value::Object(m) => {

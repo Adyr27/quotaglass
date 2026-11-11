@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-flyout-hover"
+description = "Enables the flyout_hover command without any pre-configured scope."
+commands.allow = ["flyout_hover"]
+
+[[permission]]
+identifier = "deny-flyout-hover"
+description = "Denies the flyout_hover command without any pre-configured scope."
+commands.deny = ["flyout_hover"]

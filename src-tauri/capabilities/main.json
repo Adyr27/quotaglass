@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "The only window. Events, window dragging and the app's own commands. No fs, shell, http or opener access.",
+  "description": "The pill and the flyout. Events, window dragging and the app's own commands. No fs, shell, http or opener access.",
   "windows": [
-    "main"
+    "main",
+    "flyout"
   ],
   "permissions": [
     "core:event:default",
@@ -18,11 +19,17 @@
     "allow-open-cli",
     "allow-remove-account",
     "allow-set-hidden",
-    "allow-set-pinned",
     "allow-set-label",
     "allow-connect-source",
     "allow-open-url",
-    "allow-set-panel-open",
-    "allow-set-zoom"
+    "allow-set-zoom",
+    "allow-set-pill-scale",
+    "allow-set-pill-slots",
+    "allow-set-pill-locked",
+    "allow-flyout-hover",
+    "allow-flyout-pointer",
+    "allow-flyout-open-popover",
+    "allow-flyout-close",
+    "allow-flyout-size"
   ]
 }

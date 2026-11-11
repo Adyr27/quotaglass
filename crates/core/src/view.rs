@@ -22,6 +22,8 @@ pub enum CardState {
     LoginExpired,
     /// The profile folder of an added account is gone.
     ProfileMissing,
+    /// The service answered HTTP 429. The last good reading (if any) stays on the card.
+    RateLimited,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -66,13 +68,29 @@ pub struct AccountView {
     pub profile_id: Option<String>,
     /// True when the current CLI or app login reads this account.
     pub current_login: bool,
-    pub pinned: bool,
     pub hidden: bool,
+}
+
+/// One pill ring: the best available account of one service (`summary::build`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceView {
+    pub service: Service,
+    /// The lowest tightest-limit percent among the counted accounts. `None` when no account counts.
+    pub used_percent: Option<f64>,
+    /// Every counted account has its tightest limit at 100%.
+    pub all_exhausted: bool,
+    /// Visible (not hidden) accounts of the service.
+    pub accounts: u32,
+    /// A visible account of the service is in `CardState::RateLimited`.
+    pub rate_limited: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub accounts: Vec<AccountView>,
+    /// Only services with at least one visible account, in `Service` order.
+    pub services: Vec<ServiceView>,
     pub generated_at_ms: i64,
 }

@@ -12,12 +12,18 @@ fn main() {
         "open_cli",
         "remove_account",
         "set_hidden",
-        "set_pinned",
         "set_label",
         "connect_source",
         "open_url",
-        "set_panel_open",
         "set_zoom",
+        "set_pill_scale",
+        "set_pill_slots",
+        "set_pill_locked",
+        "flyout_hover",
+        "flyout_pointer",
+        "flyout_open_popover",
+        "flyout_close",
+        "flyout_size",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

@@ -67,6 +67,7 @@ impl HttpClient {
     pub fn new() -> Result<Self, FetchError> {
         let client = reqwest::Client::builder()
             .https_only(true)
+            .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(15))
             .user_agent(concat!("QuotaGlass/", env!("CARGO_PKG_VERSION")))
@@ -175,6 +176,14 @@ async fn read_body(mut resp: reqwest::Response) -> Result<Vec<u8>, FetchError> {
     if status.is_redirection() {
         return Err(FetchError::Network(NetErrorKind::Blocked));
     }
+    if status.as_u16() == 429 {
+        let retry_after_secs = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<u64>().ok()); // an HTTP-date gives None
+        return Err(FetchError::RateLimited { retry_after_secs });
+    }
     if !status.is_success() {
         return Err(FetchError::Network(NetErrorKind::Status(status.as_u16())));
     }
@@ -233,6 +242,50 @@ mod tests {
         let http = HttpClient::for_test(&server.base);
         let err = http.get_json(Host::ChatGpt, "/x", &[]).await.unwrap_err();
         assert_eq!(err, FetchError::Network(NetErrorKind::Status(401)));
+    }
+
+    async fn status_of(status: u16, extra: &'static str) -> FetchError {
+        let server = MockServer::start(vec![(status, extra, String::new())]);
+        let http = HttpClient::for_test(&server.base);
+        http.get_json(Host::Anthropic, "/x", &[]).await.unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn status_429_with_retry_after_maps_to_rate_limited() {
+        assert_eq!(
+            status_of(429, "Retry-After: 120\r\n").await,
+            FetchError::RateLimited {
+                retry_after_secs: Some(120)
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn status_429_without_header_is_none() {
+        assert_eq!(
+            status_of(429, "").await,
+            FetchError::RateLimited {
+                retry_after_secs: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn status_429_with_http_date_is_none() {
+        assert_eq!(
+            status_of(429, "Retry-After: Wed, 21 Oct 2015 07:28:00 GMT\r\n").await,
+            FetchError::RateLimited {
+                retry_after_secs: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn other_status_unchanged() {
+        assert_eq!(
+            status_of(500, "Retry-After: 120\r\n").await,
+            FetchError::Network(NetErrorKind::Status(500))
+        );
     }
 
     #[test]

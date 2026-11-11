@@ -1,6 +1,6 @@
 // Settings. Every control saves itself through the callbacks; a failed save re-renders the stored value.
 
-import type { AccountView, Connection, Detected, Material, Settings, SettingsPatch, Theme } from "../types";
+import type { AccountView, Connection, Detected, Material, ResetToasts, Service, Settings, SettingsPatch, Theme, ToastSound } from "../types";
 import { CONNECTION_NAME, CONNECTION_ORDER, SERVICE_NAME } from "../format";
 import { createSwitch, h, iconBack, providerMark, setAttr, setText, show, syncChildren, type Switch } from "./dom";
 
@@ -75,6 +75,19 @@ export function createSettings(deps: SettingsDeps): SettingsView {
   const onTop = createSwitch({ labelledBy: "set-top", onChange: (v) => deps.onPatch({ alwaysOnTop: v }) });
   const autostart = createSwitch({ labelledBy: "set-start", onChange: (v) => deps.onPatch({ autostart: v }) });
 
+  let toasts: ResetToasts = { enabled: false, claude: false, codex: false, antigravity: false, sound: "default" };
+  const patchToasts = (change: Partial<ResetToasts>): void => {
+    toasts = { ...toasts, ...change };
+    deps.onPatch({ resetToasts: toasts });
+  };
+  const toastMaster = createSwitch({ labelledBy: "set-toast", onChange: (v) => patchToasts({ enabled: v }) });
+  const toastServices: Service[] = ["claude", "codex", "antigravity"];
+  const toastSwitches = toastServices.map((svc) => {
+    const sw: Switch = createSwitch({ labelledBy: `set-toast-${svc}`, onChange: (v) => patchToasts({ [svc]: v }) });
+    return { svc, sw, el: row(`set-toast-${svc}`, SERVICE_NAME[svc], sw.el) };
+  });
+  const toastSound = seg<ToastSound>("set-toast-sound", [["default", "Default"], ["silent", "Silent"]], (v) => patchToasts({ sound: v }));
+
   const sources = CONNECTION_ORDER.map((c) => {
     const sw: Switch = createSwitch({ labelledBy: `set-src-${c}`, onChange: (v) => deps.onSource(c, v) });
     return { c, sw, el: row(`set-src-${c}`, CONNECTION_NAME[c], sw.el) };
@@ -95,6 +108,12 @@ export function createSettings(deps: SettingsDeps): SettingsView {
       row("set-start", "Start with Windows", autostart.el),
       row("set-refresh", "Refresh every", minutes.el),
     ]),
+    h("h3", { class: "set-title" }, ["Reset reminders"]),
+    h("div", { class: "set-group" }, [
+      row("set-toast", "Reset reminders", toastMaster.el),
+      ...toastSwitches.map((t) => t.el),
+      row("set-toast-sound", "Sound", toastSound.el),
+    ]),
     h("h3", { class: "set-title" }, ["Sources"]),
     h("div", { class: "set-group" }, sources.map((s) => s.el)),
     h("h3", { class: "set-title" }, ["Account names"]),
@@ -113,6 +132,13 @@ export function createSettings(deps: SettingsDeps): SettingsView {
       minutes.set(settings.refreshMinutes);
       onTop.set(settings.alwaysOnTop);
       autostart.set(settings.autostart);
+      toasts = settings.resetToasts;
+      toastMaster.set(toasts.enabled);
+      toastSound.set(toasts.sound);
+      for (const t of toastSwitches) {
+        t.sw.set(toasts[t.svc]);
+        t.sw.el.disabled = !toasts.enabled;
+      }
       for (const s of sources) {
         const on = settings.connected.includes(s.c);
         s.sw.set(on);

@@ -4,12 +4,14 @@ use crate::freshness::classify;
 use crate::model::{AccountKey, Bucket, FetchError, Reading, Service, SourceKind};
 use crate::pace;
 use crate::provider::SourceOutcome;
+use crate::ratelimit::rate_limit_wait_secs;
 use crate::view::{AccountView, BucketView, CardState, Freshness};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 const ANTIGRAVITY_HINT: &str = "Open Antigravity to see its limits";
 const LOGIN_EXPIRED: &str = "Login expired";
 const PROFILE_MISSING: &str = "Profile folder missing";
+const RATE_LIMITED_NO_READING: &str = "Rate limited. No reading yet.";
 
 /// What a scheduler task reads: the current login of a CLI or app, an added account's profile, or neither.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,12 +26,13 @@ pub enum TaskRole {
 pub struct TaskMeta {
     pub id: String,
     pub role: TaskRole,
+    /// The task's normal interval in seconds. The wait after a 429 is never shorter.
+    pub base_secs: u64,
 }
 
 /// The user's choices and the task list that `build` applies to the cards. All keys are card IDs.
 pub struct MergeCtx<'a> {
     pub labels: &'a BTreeMap<String, String>,
-    pub pinned: &'a [String],
     pub hidden: &'a [String],
     pub tasks: &'a [TaskMeta],
 }
@@ -40,6 +43,13 @@ impl MergeCtx<'_> {
             .iter()
             .find(|t| t.id == task_id)
             .map_or(TaskRole::Other, |t| t.role)
+    }
+
+    fn base_secs(&self, task_id: &str, default: u64) -> u64 {
+        self.tasks
+            .iter()
+            .find(|t| t.id == task_id)
+            .map_or(default, |t| t.base_secs)
     }
 }
 
@@ -129,8 +139,19 @@ pub fn build(
             continue;
         };
 
-        let failure = (!fresh).then(|| latest_error(outcomes, task)).flatten();
-        let mut view = card(reading, *kind, failure, refresh_secs, now_ms);
+        let failure = (!fresh)
+            .then(|| latest_error(outcomes, task))
+            .flatten()
+            .map(|(e, attempted)| {
+                let wait = Wait {
+                    attempted_ms: attempted,
+                    base_secs: ctx.base_secs(task, refresh_secs),
+                    now_ms,
+                };
+                failure_state(*kind, &e, !reading.buckets.is_empty(), wait)
+                    .unwrap_or((CardState::Error, e.reason()))
+            });
+        let mut view = card(reading, failure, refresh_secs, now_ms);
         let tasks = per_task.keys().map(|(_, t)| t.as_str());
         view.current_login = tasks.clone().any(|t| ctx.role(t) == TaskRole::CurrentLogin);
         view.profile_id = tasks
@@ -153,7 +174,13 @@ pub fn build(
         {
             continue;
         }
-        let (state, reason) = failure_state(o.kind, e).unwrap_or((CardState::NoSource, e.reason()));
+        let wait = Wait {
+            attempted_ms: o.attempted_at_ms,
+            base_secs: ctx.base_secs(&o.task_id, refresh_secs),
+            now_ms,
+        };
+        let (state, reason) =
+            failure_state(o.kind, e, false, wait).unwrap_or((CardState::NoSource, e.reason()));
         let role = ctx.role(&o.task_id);
         // Reuse the card ID of a stored reading of this task, so labels, pins and hidden carry over. A task with a
         // stored reading is normally `covered` above; this keeps the ID right if that ever changes.
@@ -177,7 +204,6 @@ pub fn build(
             banked_resets: None,
             profile_id: (role == TaskRole::AddedAccount).then(|| o.task_id.clone()),
             current_login: role == TaskRole::CurrentLogin,
-            pinned: false,
             hidden: false,
         });
     }
@@ -187,7 +213,6 @@ pub fn build(
         if let Some(label) = ctx.labels.get(&c.id) {
             c.label = label.clone();
         }
-        c.pinned = ctx.pinned.contains(&c.id);
         c.hidden = ctx.hidden.contains(&c.id);
     }
 
@@ -231,29 +256,74 @@ fn display_name(s: Service) -> &'static str {
     }
 }
 
-/// The latest error of one task, if its last attempt failed.
-fn latest_error(outcomes: &[SourceOutcome], task_id: &str) -> Option<FetchError> {
+/// The latest error of one task and when it was attempted, if its last attempt failed.
+fn latest_error(outcomes: &[SourceOutcome], task_id: &str) -> Option<(FetchError, i64)> {
     outcomes
         .iter()
         .filter(|o| o.task_id == task_id)
-        .find_map(|o| o.result.as_ref().err().cloned())
+        .find_map(|o| {
+            o.result
+                .as_ref()
+                .err()
+                .map(|e| (e.clone(), o.attempted_at_ms))
+        })
+}
+
+/// What the rate-limit countdown needs: when the task last tried, its normal interval, and the clock.
+#[derive(Clone, Copy)]
+struct Wait {
+    attempted_ms: i64,
+    base_secs: u64,
+    now_ms: i64,
+}
+
+/// "Rate limited. Retrying in N min." from the attempt time and the wait; never from a response.
+fn rate_limited_text(retry_after: Option<u64>, w: Wait) -> String {
+    let wait_ms =
+        i64::try_from(rate_limit_wait_secs(retry_after, w.base_secs) * 1000).unwrap_or(i64::MAX);
+    let remaining = w
+        .attempted_ms
+        .saturating_add(wait_ms)
+        .saturating_sub(w.now_ms);
+    if remaining <= 0 {
+        "Rate limited. Retrying now.".into()
+    } else {
+        format!(
+            "Rate limited. Retrying in {} min.",
+            (remaining + 59_999) / 60_000
+        )
+    }
 }
 
 /// The states with their own wording. An expired login only counts for a single-account source.
-fn failure_state(kind: SourceKind, e: &FetchError) -> Option<(CardState, String)> {
+/// `has_reading`: the card still shows numbers from an earlier reading.
+fn failure_state(
+    kind: SourceKind,
+    e: &FetchError,
+    has_reading: bool,
+    wait: Wait,
+) -> Option<(CardState, String)> {
     match e {
         FetchError::Expired if kind == SourceKind::Direct => {
             Some((CardState::LoginExpired, LOGIN_EXPIRED.into()))
         }
         FetchError::ProfileMissing => Some((CardState::ProfileMissing, PROFILE_MISSING.into())),
+        FetchError::RateLimited { retry_after_secs } => Some((
+            CardState::RateLimited,
+            if has_reading {
+                rate_limited_text(*retry_after_secs, wait)
+            } else {
+                RATE_LIMITED_NO_READING.into()
+            },
+        )),
         _ => None,
     }
 }
 
+/// `failure`: the card state and reason when the task's latest attempt failed.
 fn card(
     r: &Reading,
-    kind: SourceKind,
-    failure: Option<FetchError>,
+    failure: Option<(CardState, String)>,
     refresh_secs: u64,
     now_ms: i64,
 ) -> AccountView {
@@ -291,8 +361,8 @@ fn card(
         .filter(|(_, v)| v.freshness != Freshness::Stale)
         .map(|(b, _)| b.clone())
         .collect();
-    let (state, reason) = match (&failure, buckets.is_empty()) {
-        (Some(e), _) => failure_state(kind, e).unwrap_or((CardState::Error, e.reason())),
+    let (state, reason) = match (failure, buckets.is_empty()) {
+        (Some(f), _) => f,
         (None, true) if r.key.service == Service::Antigravity => {
             (CardState::NoReadingYet, ANTIGRAVITY_HINT.into())
         }
@@ -319,7 +389,6 @@ fn card(
         banked_resets: r.banked_resets,
         profile_id: None,
         current_login: false,
-        pinned: false,
         hidden: false,
     }
 }
@@ -344,6 +413,7 @@ mod tests {
         .map(|(id, role)| TaskMeta {
             id: id.into(),
             role,
+            base_secs: 300,
         })
         .collect()
     }
@@ -404,7 +474,6 @@ mod tests {
 
     struct Prefs {
         labels: BTreeMap<String, String>,
-        pinned: Vec<String>,
         hidden: Vec<String>,
     }
 
@@ -412,7 +481,6 @@ mod tests {
         fn none() -> Self {
             Self {
                 labels: BTreeMap::new(),
-                pinned: vec![],
                 hidden: vec![],
             }
         }
@@ -426,7 +494,6 @@ mod tests {
         let tasks = tasks();
         let ctx = MergeCtx {
             labels: &prefs.labels,
-            pinned: &prefs.pinned,
             hidden: &prefs.hidden,
             tasks: &tasks,
         };
@@ -653,6 +720,93 @@ mod tests {
             cards[0].reason.as_deref(),
             Some(FetchError::Timeout.reason().as_str())
         );
+    }
+
+    fn rate_limited(task: &str, retry_after_secs: Option<u64>, attempted: i64) -> SourceOutcome {
+        let mut o = err(
+            task,
+            SourceKind::Direct,
+            Service::Claude,
+            FetchError::RateLimited { retry_after_secs },
+        );
+        o.attempted_at_ms = attempted;
+        o
+    }
+
+    #[test]
+    fn rate_limited_keeps_last_reading() {
+        let mut last = LastReadings::default();
+        run(
+            &[claude("claude-current", "a@example.com", 42.0)],
+            &mut last,
+        );
+        let cards = run(&[rate_limited("claude-current", Some(120), NOW)], &mut last);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].state, CardState::RateLimited);
+        assert_eq!(cards[0].headline.as_ref().unwrap().used_percent, 42.0);
+        assert_eq!(cards[0].buckets.len(), 1);
+        // Retry-After 120 s is below the 300 s base, so the base wins.
+        assert_eq!(
+            cards[0].reason.as_deref(),
+            Some("Rate limited. Retrying in 5 min.")
+        );
+    }
+
+    #[test]
+    fn rate_limited_reason_counts_down() {
+        let mut last = LastReadings::default();
+        run(
+            &[claude("claude-current", "a@example.com", 42.0)],
+            &mut last,
+        );
+        // The test task list gives claude-current a 300 s base: attempted 2 min ago, wait 5 min.
+        let cards = run(
+            &[rate_limited("claude-current", None, NOW - 120_000)],
+            &mut last,
+        );
+        assert_eq!(
+            cards[0].reason.as_deref(),
+            Some("Rate limited. Retrying in 3 min.")
+        );
+        let cards = run(
+            &[rate_limited("claude-current", None, NOW - 300_000)],
+            &mut last,
+        );
+        assert_eq!(
+            cards[0].reason.as_deref(),
+            Some("Rate limited. Retrying now.")
+        );
+    }
+
+    #[test]
+    fn rate_limited_without_reading() {
+        let mut last = LastReadings::default();
+        let cards = run(&[rate_limited("p1", Some(120), NOW)], &mut last);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].state, CardState::RateLimited);
+        assert!(cards[0].buckets.is_empty());
+        assert!(cards[0].headline.is_none());
+        assert_eq!(
+            cards[0].reason.as_deref(),
+            Some("Rate limited. No reading yet.")
+        );
+    }
+
+    #[test]
+    fn rate_limit_text_has_no_body() {
+        let mut last = LastReadings::default();
+        run(
+            &[claude("claude-current", "a@example.com", 42.0)],
+            &mut last,
+        );
+        let cards = run(
+            &[rate_limited("claude-current", Some(9_999), NOW)],
+            &mut last,
+        );
+        let reason = cards[0].reason.clone().unwrap();
+        // Capped at 15 min; fixed wording only, no status code, header or body text.
+        assert_eq!(reason, "Rate limited. Retrying in 15 min.");
+        assert!(!reason.contains("429") && !reason.contains('{'));
     }
 
     #[test]
@@ -937,7 +1091,6 @@ mod tests {
         let mut prefs = Prefs::none();
         let id = id_of(Service::Claude, "a@example.com");
         prefs.hidden = vec![id.clone()];
-        prefs.pinned = vec![id.clone()];
         prefs.labels.insert(id.clone(), "Work".into());
         run_with(
             &[claude("claude-current", "a@example.com", 10.0)],
@@ -957,7 +1110,7 @@ mod tests {
             );
             assert_eq!(cards.len(), 1, "no second card under the task's own ID");
             assert_eq!(cards[0].id, id);
-            assert!(cards[0].hidden && cards[0].pinned);
+            assert!(cards[0].hidden);
             assert_eq!(cards[0].label, "Work");
             assert_ne!(cards[0].state, CardState::Ok);
         }
@@ -1006,12 +1159,11 @@ mod tests {
     }
 
     #[test]
-    fn pinned_and_hidden_flags() {
+    fn hidden_flag() {
         let mut last = LastReadings::default();
         let mut prefs = Prefs::none();
         let a = id_of(Service::Claude, "a@example.com");
         let b = id_of(Service::Claude, "b@example.com");
-        prefs.pinned = vec![a.clone()];
         prefs.hidden = vec![b.clone()];
         let cards = run_with(
             &[
@@ -1022,8 +1174,8 @@ mod tests {
             &prefs,
         );
         let find = |id: &str| cards.iter().find(|c| c.id == id).unwrap();
-        assert!(find(&a).pinned && !find(&a).hidden);
-        assert!(find(&b).hidden && !find(&b).pinned);
+        assert!(!find(&a).hidden);
+        assert!(find(&b).hidden);
     }
 
     #[test]

@@ -4,6 +4,8 @@
 use quotaglass_core::view::Snapshot;
 use quotaglass_core::warnings::{self, WarnState};
 use quotaglass_core::Service;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::collections::BTreeSet;
 use std::io;
 use std::path::PathBuf;
@@ -18,35 +20,35 @@ pub struct Alert {
     pub level: u8,
 }
 
-pub struct WarnStore {
+/// A small JSON file in `%APPDATA%\QuotaGlass`, written atomically. Used for `warnings.json` and `resets.json`.
+pub struct JsonStore {
     path: PathBuf,
 }
 
-impl WarnStore {
+impl JsonStore {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
 
-    /// `%APPDATA%\QuotaGlass\warnings.json`, or `None` when APPDATA is not set.
-    pub fn default_path() -> Option<PathBuf> {
-        std::env::var_os("APPDATA")
-            .map(|a| PathBuf::from(a).join("QuotaGlass").join("warnings.json"))
+    /// `%APPDATA%\QuotaGlass\<name>`, or `None` when APPDATA is not set.
+    pub fn in_appdata(name: &str) -> Option<PathBuf> {
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("QuotaGlass").join(name))
     }
 
-    /// A missing or broken file gives an empty state. Worst case, a warning shows once more.
-    pub fn load(&self) -> WarnState {
+    /// A missing or broken file gives an empty state. Worst case, a toast shows once more or not at all.
+    pub fn load<T: DeserializeOwned + Default>(&self) -> T {
         std::fs::read(&self.path)
             .ok()
             .and_then(|raw| serde_json::from_slice(&raw).ok())
             .unwrap_or_default()
     }
 
-    /// Writes `warnings.json.tmp`, then renames it over `warnings.json`.
-    pub fn save(&self, state: &WarnState) -> io::Result<()> {
+    /// Writes `<name>.tmp`, then renames it over `<name>`.
+    pub fn save<T: Serialize>(&self, state: &T) -> io::Result<()> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = self.path.with_file_name("warnings.json.tmp");
+        let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_vec(state).map_err(io::Error::other)?)?;
         std::fs::rename(&tmp, &self.path)
     }
@@ -55,10 +57,10 @@ impl WarnStore {
 /// App state: the fired levels and their file.
 pub struct Warnings {
     pub state: Mutex<WarnState>,
-    pub store: WarnStore,
+    pub store: JsonStore,
 }
 
-fn provider_name(service: Service) -> &'static str {
+pub fn provider_name(service: Service) -> &'static str {
     match service {
         Service::Claude => "Claude",
         Service::Codex => "Codex",
@@ -138,7 +140,7 @@ pub fn on_snapshot(app: &AppHandle, warnings: &Warnings, snapshot: &Snapshot) {
         send(app, &alert);
     }
     if *state != before {
-        if let Err(e) = warnings.store.save(&state) {
+        if let Err(e) = warnings.store.save(&*state) {
             tracing::warn!(error = ?e, "could not save warnings.json");
         }
     }
@@ -182,13 +184,13 @@ mod tests {
             banked_resets: None,
             profile_id: None,
             current_login: true,
-            pinned: false,
             hidden: false,
         }
     }
 
     fn snap(accounts: Vec<AccountView>) -> Snapshot {
         Snapshot {
+            services: quotaglass_core::summary::build(&accounts),
             accounts,
             generated_at_ms: NOW,
         }
@@ -320,17 +322,25 @@ mod tests {
     fn broken_warnings_file_starts_empty() {
         let dir = std::env::temp_dir().join(format!("qg-warn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let store = WarnStore::new(dir.join("warnings.json"));
-        assert_eq!(store.load(), WarnState::default(), "missing file");
+        let store = JsonStore::new(dir.join("warnings.json"));
+        assert_eq!(
+            store.load::<WarnState>(),
+            WarnState::default(),
+            "missing file"
+        );
 
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("warnings.json"), b"{\"a|5h\":{\"reset_ms\":").unwrap();
-        assert_eq!(store.load(), WarnState::default(), "broken file");
+        assert_eq!(
+            store.load::<WarnState>(),
+            WarnState::default(),
+            "broken file"
+        );
 
         let mut state = WarnState::default();
         warnings::due(&mut state, "a|5h", 85.0, Some(NOW));
         store.save(&state).unwrap();
-        assert_eq!(store.load(), state);
+        assert_eq!(store.load::<WarnState>(), state);
         assert!(!dir.join("warnings.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

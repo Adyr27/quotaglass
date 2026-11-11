@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-flyout-pointer"
+description = "Enables the flyout_pointer command without any pre-configured scope."
+commands.allow = ["flyout_pointer"]
+
+[[permission]]
+identifier = "deny-flyout-pointer"
+description = "Denies the flyout_pointer command without any pre-configured scope."
+commands.deny = ["flyout_pointer"]

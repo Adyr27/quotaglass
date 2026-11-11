@@ -10,7 +10,7 @@
 //!
 //! This is how the person's existing Antigravity login is reused: the signed-in app's own server answers with that
 //! login's quota, so there is no second sign-in. Reading the app's stored Google session instead was ruled out: the
-//! product never uses the Antigravity Google session (`PRODUCT.md`), an access token would need a refresh (never done
+//! product never uses the Antigravity Google session (a product rule), an access token would need a refresh (never done
 //! here), and it would add a Google host to the network allowlist. Constraint: limits can be read only while the app
 //! runs. While it is closed, the panel says so and the card returns on the next refresh after the app opens.
 

@@ -6,7 +6,7 @@ export type SourceKind = "direct" | "antigravityApp";
 
 export type Freshness = "live" | "aged" | "stale";
 
-export type CardState = "ok" | "noReadingYet" | "error" | "noSource" | "loginExpired" | "profileMissing";
+export type CardState = "ok" | "noReadingYet" | "error" | "noSource" | "loginExpired" | "profileMissing" | "rateLimited";
 
 export interface BucketView {
   name: string;
@@ -40,12 +40,29 @@ export interface AccountView {
   /** The added account (profile) that reads this account. */
   profileId: string | null;
   currentLogin: boolean;
-  pinned: boolean;
   hidden: boolean;
+}
+
+/** One pill slot: the best reading over the visible accounts of a service. */
+export interface ServiceView {
+  service: Service;
+  usedPercent: number | null;
+  allExhausted: boolean;
+  accounts: number;
+  rateLimited: boolean;
+}
+
+export type FlyoutView = "settings" | "first";
+
+export interface FlyoutMode {
+  mode: "hover" | "popover" | "hidden";
+  service: Service | null;
+  view: FlyoutView | null;
 }
 
 export interface Snapshot {
   accounts: AccountView[];
+  services: ServiceView[];
   generatedAtMs: number;
 }
 
@@ -70,13 +87,24 @@ export interface AddedAccount {
   profileDir: string;
 }
 
+export type ToastSound = "default" | "silent";
+
+/** Which reset toasts the person wants, and with what sound. */
+export interface ResetToasts {
+  enabled: boolean;
+  claude: boolean;
+  codex: boolean;
+  antigravity: boolean;
+  sound: ToastSound;
+}
+
 export interface Settings {
-  version: 2;
+  version: 3;
   pillPosition: WindowRect | null;
-  /** The panel size in CSS px as the person left it. */
-  panelSize: { width: number; height: number } | null;
-  /** The pill width in CSS px. */
-  pillWidth: number | null;
+  /** Pill size factor, 0.65 to 1.6. Changed only with `setPillScale`. */
+  pillScale: number;
+  /** Window lock: no drag, no resize. Changed only with `setPillLocked`. */
+  pillLocked: boolean;
   alwaysOnTop: boolean;
   autostart: boolean;
   refreshMinutes: number;
@@ -84,11 +112,10 @@ export interface Settings {
   material: Material;
   connected: Connection[];
   addedAccounts: AddedAccount[];
-  /** Account IDs in display order, at most 4. */
-  pinnedAccounts: string[];
   hiddenAccounts: string[];
   /** Account ID to label, at most 40 characters each. */
   labels: Record<string, string>;
+  resetToasts: ResetToasts;
 }
 
 export type SettingsPatch = Partial<
@@ -100,7 +127,7 @@ export type SettingsPatch = Partial<
     | "theme"
     | "material"
     | "connected"
-    | "pinnedAccounts"
+    | "resetToasts"
     | "hiddenAccounts"
     | "labels"
   >

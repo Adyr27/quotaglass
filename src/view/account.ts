@@ -3,12 +3,11 @@
 // never takes focus away; the strips are rebuilt because nothing in them takes focus.
 
 import type { AccountView, BucketView } from "../types";
-import { resetText, sentenceCase, SERVICE_NAME, updatedText, usedWhole } from "../format";
-import { h, iconPin, iconRefresh, setAttr, setText, show, syncChildren } from "./dom";
+import { resetText, sentenceCase, SERVICE_NAME, stateText, updatedText, usedWhole } from "../format";
+import { h, iconRefresh, setAttr, setText, show, syncChildren } from "./dom";
 import { createStrip } from "./strip";
 
 export interface DetailDeps {
-  onPin(account: AccountView): void;
   onRefresh(): void;
   onRemove(account: AccountView): void;
   onHide(account: AccountView): void;
@@ -35,24 +34,6 @@ function limitRow(b: BucketView, account: AccountView, nowMs: number): HTMLEleme
   ]);
 }
 
-/** The one line that says why there are no live numbers, or null when there is nothing to say. */
-function stateText(a: AccountView): string | null {
-  switch (a.state) {
-    case "loginExpired":
-      return "Login expired.";
-    case "profileMissing":
-      return "Profile folder missing.";
-    case "noReadingYet":
-      return a.profileId !== null ? "Finish signing in in the console." : "No reading yet.";
-    case "error":
-      return a.reason ?? "Could not read this account.";
-    case "noSource":
-      return a.reason ?? "Open Antigravity to see its limits.";
-    default:
-      return a.freshness === "stale" ? "Last refresh failed." : null;
-  }
-}
-
 /** Label for the sign-in button, or null when the account has none. */
 function signInLabel(a: AccountView): string | null {
   if (a.service === "antigravity") return null;
@@ -75,7 +56,6 @@ export function createDetail(deps: DetailDeps): Detail {
   const banked = h("p", { class: "banked" }, [bankedText, redeem]);
 
   const best = h("span", { class: "best" }, ["Best now"]);
-  const pin = h("button", { class: "icon-btn", type: "button", "aria-pressed": "false", "aria-label": "Pin to the pill", title: "Pin to the pill" }, [iconPin()]);
   const refresh = h("button", { class: "icon-btn", type: "button", "aria-label": "Refresh", title: "Refresh" }, [iconRefresh()]);
   // The destructive action goes last, on its own.
   const remove = h("button", { class: "btn btn-quiet", type: "button" });
@@ -91,7 +71,6 @@ export function createDetail(deps: DetailDeps): Detail {
   const empty = h("p", { class: "detail-empty" }, ["Pick an account."]);
   const body = h("div", { class: "detail-body" }, [h("header", { class: "detail-head" }, [
     h("div", { class: "detail-title" }, [h("div", { class: "detail-title-row" }, [name, best]), meta]),
-    pin,
     refresh,
   ]), stateRow, limits, banked, actions, confirm]);
   const el = h("section", { class: "detail", "aria-labelledby": "detail-title" }, [empty, body]);
@@ -101,7 +80,6 @@ export function createDetail(deps: DetailDeps): Detail {
     show(actions, true);
   };
 
-  pin.addEventListener("click", () => current !== null && deps.onPin(current));
   refresh.addEventListener("click", () => deps.onRefresh());
   signIn.addEventListener("click", () => current !== null && deps.onSignIn(current));
   redeem.addEventListener("click", () => deps.onRedeem());
@@ -156,10 +134,6 @@ export function createDetail(deps: DetailDeps): Detail {
       setText(bankedText, `Banked resets: ${account.bankedResets ?? 0}`);
 
       show(best, account.bestNow);
-      setAttr(pin, "aria-pressed", account.pinned ? "true" : "false");
-      const pinText = account.pinned ? "Unpin from the pill" : "Pin to the pill";
-      setAttr(pin, "aria-label", pinText);
-      setAttr(pin, "title", pinText);
       refresh.classList.toggle("is-busy", refreshing);
       setAttr(refresh, "aria-busy", refreshing ? "true" : null);
       setText(remove, account.profileId === null ? "Hide" : "Remove");

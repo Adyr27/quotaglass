@@ -6,7 +6,7 @@ export type Child = Node | string | null | undefined | false;
 export type AttrValue = string | number | boolean | null | undefined;
 export type Attrs = Record<string, AttrValue>;
 
-export function setAttrs(el: Element, attrs: Attrs): void {
+function setAttrs(el: Element, attrs: Attrs): void {
   for (const name of Object.keys(attrs)) {
     const value = attrs[name];
     if (value === null || value === undefined || value === false) {
@@ -52,10 +52,6 @@ export function show(el: HTMLElement, visible: boolean): void {
   if (el.hidden === visible) el.hidden = !visible;
 }
 
-export function isVisible(el: Element): boolean {
-  return el.isConnected && el.getClientRects().length > 0;
-}
-
 /**
  * Makes `parent` hold exactly `wanted`, in that order. Nodes already in the right place are not
  * touched, so focus and scroll position survive a refresh.
@@ -80,7 +76,7 @@ export function syncChildren(parent: Element, wanted: readonly Element[]): void 
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-function svgEl(tag: "svg" | "path" | "circle", attrs: Attrs, children: readonly SVGElement[] = []): SVGElement {
+export function svg(tag: "svg" | "path" | "circle", attrs: Attrs, children: readonly SVGElement[] = []): SVGElement {
   const el = document.createElementNS(SVG_NS, tag);
   setAttrs(el, attrs);
   for (const child of children) el.append(child);
@@ -88,11 +84,11 @@ function svgEl(tag: "svg" | "path" | "circle", attrs: Attrs, children: readonly 
 }
 
 function shape(d: string, cls?: string): SVGElement {
-  return svgEl("path", { d, class: cls });
+  return svg("path", { d, class: cls });
 }
 
 function icon(size: number, shapes: readonly SVGElement[], cls?: string): SVGElement {
-  return svgEl(
+  return svg(
     "svg",
     {
       viewBox: `0 0 ${size} ${size}`,
@@ -121,8 +117,8 @@ export function iconPin(): SVGElement {
 export function iconSliders(): SVGElement {
   return icon(16, [
     shape("M2.5 5h6.25M12.25 5h1.25M2.5 11h1.25M7.25 11h6.25"),
-    svgEl("circle", { cx: 10.5, cy: 5, r: 1.75 }),
-    svgEl("circle", { cx: 5.5, cy: 11, r: 1.75 }),
+    svg("circle", { cx: 10.5, cy: 5, r: 1.75 }),
+    svg("circle", { cx: 5.5, cy: 11, r: 1.75 }),
   ]);
 }
 
@@ -133,14 +129,6 @@ export function iconBack(): SVGElement {
 /** The provider's icon, drawn by CSS from `src/assets/providers/<service>.svg` in the provider's colour. */
 export function providerMark(service: string, cls = "mark"): HTMLSpanElement {
   return h("span", { class: cls, "data-service": service, "aria-hidden": "true" });
-}
-
-export function iconChevron(cls: string): SVGElement {
-  return icon(16, [shape("M4 6.25l4 4 4-4")], cls);
-}
-
-export function markRing(cls: string): SVGElement {
-  return icon(14, [svgEl("circle", { cx: 7, cy: 7, r: 5.75 })], cls);
 }
 
 // Switch: a real button with role="switch". The whole 44 by 32 area is the hit target.

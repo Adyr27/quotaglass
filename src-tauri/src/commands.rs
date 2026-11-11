@@ -1,6 +1,7 @@
 //! The only functions the UI can call. Errors are fixed short strings; nothing secret passes through here.
 
 use crate::connect::{self, CliAction, UrlTarget};
+use crate::flyout::{self, View};
 use crate::scheduler::{lock, Detected, Scheduler};
 use crate::settings::{AddedAccount, Connection, Settings, SettingsPatch, SettingsStore};
 use crate::window;
@@ -9,7 +10,7 @@ use quotaglass_core::Service;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_autostart::ManagerExt;
 
 pub struct AppState {
@@ -64,6 +65,9 @@ pub fn update(app: &AppHandle, patch: SettingsPatch) -> Result<Settings, String>
             .save(&next)
             .map_err(|_| "Could not save settings.")?;
         *current = next.clone();
+        // The scheduler's publish runs the snapshot callbacks on this thread, with the settings lock held:
+        // they must never take it. The reset reminders get their copy of the switches first.
+        crate::reset_notify::set_toasts(app, &next.reset_toasts);
         state.scheduler.apply(&next);
         next
     };
@@ -84,16 +88,61 @@ pub fn get_snapshot(app: AppHandle) -> Snapshot {
     state.scheduler.snapshot()
 }
 
-/// The UI's zoom: device px per CSS px. Windows text size changes it, so the window follows it.
+/// The pill UI's zoom: device px per CSS px. Windows text size changes it, so the pill follows it.
+/// Other windows have their own zoom and never resize the pill.
 #[tauri::command]
-pub async fn set_zoom(app: AppHandle, zoom: f64) -> Result<(), String> {
+pub async fn set_zoom(app: AppHandle, window: WebviewWindow, zoom: f64) -> Result<(), String> {
+    if window.label() != "main" {
+        return Ok(());
+    }
     window::set_zoom(&app, zoom).map_err(|_| "Could not resize the window.".to_string())
 }
 
-/// Opens the panel from the pill, or closes it back to the pill. True: the panel grew upward.
+/// The grip's new pill scale, 0.65 to 1.6. Ignored while the pill is locked.
 #[tauri::command]
-pub async fn set_panel_open(app: AppHandle, open: bool) -> Result<bool, String> {
-    window::set_panel_open(&app, open).map_err(|_| "Could not resize the window.".to_string())
+pub async fn set_pill_scale(app: AppHandle, scale: f64) -> Result<(), String> {
+    window::set_pill_scale(&app, scale).map_err(|_| "Could not resize the window.".to_string())
+}
+
+/// How many service slots the pill shows, 1 to 3.
+#[tauri::command]
+pub async fn set_pill_slots(app: AppHandle, count: u32) -> Result<(), String> {
+    window::set_pill_slots(&app, count).map_err(|_| "Could not resize the window.".to_string())
+}
+
+/// Pin (lock) or unpin the pill.
+#[tauri::command]
+pub async fn set_pill_locked(app: AppHandle, locked: bool) -> Result<(), String> {
+    window::set_pill_locked(&app, locked)
+}
+
+/// The pill: the pointer or keyboard focus entered or left a slot. `anchor_x` is the slot centre in CSS px.
+#[tauri::command]
+pub fn flyout_hover(app: AppHandle, service: Service, inside: bool, anchor_x: f64) {
+    flyout::hover(&app, service, inside, anchor_x);
+}
+
+/// The flyout: the pointer entered or left it.
+#[tauri::command]
+pub fn flyout_pointer(app: AppHandle, inside: bool) {
+    flyout::pointer(&app, inside);
+}
+
+/// Click, Enter, tray, toast or first run: open the popover with focus.
+#[tauri::command]
+pub fn flyout_open_popover(app: AppHandle, service: Option<Service>, view: Option<View>) {
+    flyout::open_popover(&app, service, view);
+}
+
+#[tauri::command]
+pub fn flyout_close(app: AppHandle) {
+    flyout::close(&app);
+}
+
+/// The flyout's content height in CSS px; clamped to 96-520.
+#[tauri::command]
+pub fn flyout_size(app: AppHandle, height_css: f64) {
+    flyout::set_height(&app, height_css);
 }
 
 #[tauri::command]
@@ -239,6 +288,7 @@ fn mutate(
         .save(&next)
         .map_err(|_| "Could not save settings.")?;
     *current = next.clone();
+    crate::reset_notify::set_toasts(app, &next.reset_toasts);
     state.scheduler.apply(&next);
     Ok(next)
 }
@@ -404,20 +454,6 @@ pub async fn set_hidden(
 }
 
 #[tauri::command]
-pub async fn set_pinned(
-    app: AppHandle,
-    account_id: String,
-    pinned: bool,
-) -> Result<Settings, String> {
-    if pinned {
-        require_card(&app, &account_id)?;
-    }
-    mutate(&app, |s| {
-        s.set_pinned(&account_id, pinned).map_err(String::from)
-    })
-}
-
-#[tauri::command]
 pub async fn set_label(
     app: AppHandle,
     account_id: String,
@@ -473,7 +509,6 @@ mod tests {
             banked_resets: None,
             profile_id: profile.map(String::from),
             current_login: current,
-            pinned: false,
             hidden: false,
         }
     }
@@ -631,7 +666,7 @@ mod tests {
             .map(|p| p.replace('-', "_"))
             .collect();
 
-        assert_eq!(handlers.len(), 16, "{handlers:?}");
+        assert_eq!(handlers.len(), 22, "{handlers:?}");
         assert!(handlers.contains("detect"));
         assert_eq!(manifest, handlers, "build.rs AppManifest::commands");
         assert_eq!(allowed, handlers, "capabilities/main.json allow-* entries");

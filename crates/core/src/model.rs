@@ -107,6 +107,10 @@ pub enum FetchError {
     Format(&'static str),
     Network(NetErrorKind),
     Timeout,
+    /// HTTP 429. `retry_after_secs` is the `Retry-After` header as whole seconds; an HTTP-date gives `None`.
+    RateLimited {
+        retry_after_secs: Option<u64>,
+    },
 }
 
 impl FetchError {
@@ -127,6 +131,8 @@ impl FetchError {
                 "Blocked a redirect away from the service".into()
             }
             FetchError::Timeout => "The source took too long to answer".into(),
+            // The card text with the minutes is built in `merge`.
+            FetchError::RateLimited { .. } => "Rate limited".into(),
         }
     }
 }

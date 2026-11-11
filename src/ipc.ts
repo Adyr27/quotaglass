@@ -3,7 +3,18 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { BackdropPayload, Connection, Detected, Service, Settings, SettingsPatch, Snapshot, UrlTarget } from "./types";
+import type {
+  BackdropPayload,
+  Connection,
+  Detected,
+  FlyoutMode,
+  FlyoutView,
+  Service,
+  Settings,
+  SettingsPatch,
+  Snapshot,
+  UrlTarget,
+} from "./types";
 
 export type Result<T> = { ok: true; value: T } | { ok: false };
 
@@ -21,7 +32,7 @@ function publish(): void {
   notify(latest);
 }
 
-export function clearProblems(...keys: string[]): void {
+function clearProblems(...keys: string[]): void {
   let changed = false;
   for (const key of keys) {
     if (problems.delete(key)) changed = true;
@@ -101,10 +112,6 @@ export function setHidden(accountId: string, hidden: boolean): Promise<Result<Se
   return call<Settings>("set_hidden", "Could not change that account.", { accountId, hidden });
 }
 
-export function setPinned(accountId: string, pinned: boolean): Promise<Result<Settings>> {
-  return call<Settings>("set_pinned", "Could not change the pin.", { accountId, pinned });
-}
-
 export function setLabel(accountId: string, label: string | null): Promise<Result<Settings>> {
   return call<Settings>("set_label", "Could not save the name.", { accountId, label });
 }
@@ -129,25 +136,56 @@ export function onSnapshot(handler: (snapshot: Snapshot) => void): Promise<void>
   return subscribe<Snapshot>("snapshot", handler);
 }
 
-export function onSettings(handler: (settings: Settings) => void): Promise<void> {
-  return subscribe<Settings>("settings", handler);
-}
-
 export function onBackdrop(handler: (payload: BackdropPayload) => void): Promise<void> {
   return subscribe<BackdropPayload>("backdrop", handler);
-}
-
-export function onOpenSettings(handler: () => void): Promise<void> {
-  return subscribe<null>("open-settings", () => handler());
 }
 
 export function setZoom(zoom: number): Promise<Result<void>> {
   return call<void>("set_zoom", "Could not resize the window.", { zoom });
 }
 
-/** Resolves to true while the panel extends above the pill. */
-export function setPanelOpen(open: boolean): Promise<Result<boolean>> {
-  return call<boolean>("set_panel_open", "Could not resize the window.", { open });
+export function setPillScale(scale: number): Promise<Result<void>> {
+  return call<void>("set_pill_scale", "Could not resize the window.", { scale });
+}
+
+export function setPillSlots(count: number): Promise<Result<void>> {
+  return call<void>("set_pill_slots", "Could not resize the window.", { count });
+}
+
+export function setPillLocked(locked: boolean): Promise<Result<void>> {
+  return call<void>("set_pill_locked", "Could not pin the window.", { locked });
+}
+
+export function flyoutHover(service: Service, inside: boolean, anchorX: number): Promise<Result<void>> {
+  return call<void>("flyout_hover", "Could not show the details.", { service, inside, anchorX });
+}
+
+export function flyoutPointer(inside: boolean): Promise<Result<void>> {
+  return call<void>("flyout_pointer", "Could not show the details.", { inside });
+}
+
+export function flyoutOpenPopover(service: Service | null, view: FlyoutView | null): Promise<Result<void>> {
+  return call<void>("flyout_open_popover", "Could not open the details.", { service, view });
+}
+
+export function flyoutClose(): Promise<Result<void>> {
+  return call<void>("flyout_close", "Could not close the details.");
+}
+
+export function flyoutSize(heightCss: number): Promise<Result<void>> {
+  return call<void>("flyout_size", "Could not resize the details.", { heightCss });
+}
+
+export function onFocusPill(handler: () => void): Promise<void> {
+  return subscribe<null>("focus-pill", () => handler());
+}
+
+export function onFlyoutMode(handler: (mode: FlyoutMode) => void): Promise<void> {
+  return subscribe<FlyoutMode>("flyout-mode", handler);
+}
+
+export function onPillLocked(handler: (locked: boolean) => void): Promise<void> {
+  return subscribe<boolean>("pill-locked", handler);
 }
 
 export function onTheme(handler: (theme: "light" | "dark") => void): Promise<void> {

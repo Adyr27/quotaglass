@@ -62,8 +62,28 @@ export function sentenceCase(value: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
+/** The one line that says why there are no live numbers, or null when there is nothing to say. */
+export function stateText(a: AccountView): string | null {
+  switch (a.state) {
+    case "loginExpired":
+      return "Login expired.";
+    case "profileMissing":
+      return "Profile folder missing.";
+    case "noReadingYet":
+      return a.profileId !== null ? "Finish signing in in the console." : "No reading yet.";
+    case "error":
+      return a.reason ?? "Could not read this account.";
+    case "rateLimited":
+      return a.reason ?? "Rate limited. Showing the last reading.";
+    case "noSource":
+      return a.reason ?? "Open Antigravity to see its limits.";
+    default:
+      return a.freshness === "stale" ? "Last refresh failed." : null;
+  }
+}
+
 /** The limit closest to running out; null without readings. */
-export function worstBucket(account: AccountView): BucketView | null {
+function worstBucket(account: AccountView): BucketView | null {
   let worst: BucketView | null = null;
   for (const b of account.buckets) if (worst === null || b.usedPercent > worst.usedPercent) worst = b;
   return worst;

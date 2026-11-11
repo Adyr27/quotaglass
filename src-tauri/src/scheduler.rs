@@ -6,7 +6,9 @@ use quotaglass_core::sources::antigravity_app::AntigravityApp;
 use quotaglass_core::sources::claude_direct::ClaudeDirect;
 use quotaglass_core::sources::codex_direct::CodexDirect;
 use quotaglass_core::view::Snapshot;
-use quotaglass_core::{Env, FetchError, Provider, Reading, Service, SourceOutcome};
+use quotaglass_core::{
+    rate_limit_wait_secs, Env, FetchError, Provider, Reading, Service, SourceOutcome,
+};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -20,6 +22,8 @@ use tokio::time::{interval_at, Instant, Interval, MissedTickBehavior};
 /// Freshness, ages and the headline depend on the clock, so the snapshot is rebuilt this often between fetches.
 const REPUBLISH_SECS: u64 = 30;
 const BACKOFF_CAP_SECS: u64 = 900;
+/// [Unverified] guess: Anthropic does not document this endpoint's limits. The owner tests it live.
+const CLAUDE_FLOOR_SECS: u64 = 300;
 
 pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -49,6 +53,15 @@ impl Entry {
                 TaskRole::CurrentLogin
             }
             Target::ClaudeProfile(_) | Target::CodexProfile(_) => TaskRole::AddedAccount,
+        }
+    }
+
+    /// The normal interval. Claude direct never polls faster than every 5 minutes (spec §4).
+    fn base_secs(&self, refresh_minutes: u8) -> u64 {
+        let refresh = u64::from(refresh_minutes) * 60;
+        match self.target {
+            Target::ClaudeCurrent | Target::ClaudeProfile(_) => refresh.max(CLAUDE_FLOOR_SECS),
+            _ => refresh,
         }
     }
 
@@ -190,12 +203,21 @@ fn ticker(start: Instant, period_secs: u64) -> Interval {
     t
 }
 
-/// Calls `step` now, then every `base_secs` (longer while it keeps failing), and whenever `wake` fires.
-/// `step` returns true on success.
+/// What one run of a task gives the loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepResult {
+    Ok,
+    Failed,
+    /// HTTP 429, with the server's `Retry-After` seconds when it sent an integer.
+    RateLimited(Option<u64>),
+}
+
+/// Calls `step` now, then every `base_secs` (longer while it keeps failing, or after a 429), and whenever `wake`
+/// fires. A wake runs the step at once: that is the manual Retry that bypasses any wait.
 async fn run_loop<F, Fut>(base_secs: u64, wake: Arc<Notify>, mut step: F)
 where
     F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
+    Fut: Future<Output = StepResult>,
 {
     let mut backoff = Backoff::new(base_secs);
     let mut period = base_secs;
@@ -205,12 +227,16 @@ where
             _ = timer.tick() => {}
             _ = wake.notified() => {}
         }
-        let next = if step().await {
-            backoff.succeeded()
-        } else {
-            backoff.failed()
+        let result = step().await;
+        let next = match result {
+            StepResult::Ok => backoff.succeeded(),
+            StepResult::Failed => backoff.failed(),
+            // The backoff does not double for a 429: the server said how long to wait.
+            StepResult::RateLimited(retry_after) => rate_limit_wait_secs(retry_after, base_secs),
         };
-        if next != period {
+        // After a 429 the wait always starts now, even when the period is unchanged: a manual run in the middle of
+        // a period must not let the old timer fire early.
+        if next != period || matches!(result, StepResult::RateLimited(_)) {
             period = next;
             timer = ticker(Instant::now() + Duration::from_secs(period), period);
         }
@@ -226,7 +252,6 @@ struct State {
     /// `None` until the first `apply`.
     tasks: Option<Vec<TaskMeta>>,
     labels: BTreeMap<String, String>,
-    pinned: Vec<String>,
     hidden: Vec<String>,
 }
 
@@ -237,12 +262,12 @@ impl State {
             last: LastReadings::default(),
             snapshot: Snapshot {
                 accounts: Vec::new(),
+                services: Vec::new(),
                 generated_at_ms: now_ms,
             },
             refresh_minutes: 2,
             tasks: None,
             labels: BTreeMap::new(),
-            pinned: Vec::new(),
             hidden: Vec::new(),
         }
     }
@@ -263,14 +288,15 @@ impl State {
         let restart = tasks_changed || self.refresh_minutes != settings.refresh_minutes;
         self.refresh_minutes = settings.refresh_minutes;
         self.labels = settings.labels.clone();
-        self.pinned = settings.pinned_accounts.clone();
         self.hidden = settings.hidden_accounts.clone();
-        if tasks_changed {
+        // A new interval changes every task's base, so the metadata is rebuilt on every restart.
+        if restart {
             let next: Vec<TaskMeta> = plan
                 .iter()
                 .map(|e| TaskMeta {
                     id: e.id.clone(),
                     role: e.role(),
+                    base_secs: e.base_secs(settings.refresh_minutes),
                 })
                 .collect();
             // A removed task leaves nothing behind. Kept tasks keep their readings until they answer again.
@@ -309,13 +335,13 @@ impl State {
         let outcomes: Vec<SourceOutcome> = self.outcomes.values().cloned().collect();
         let ctx = MergeCtx {
             labels: &self.labels,
-            pinned: &self.pinned,
             hidden: &self.hidden,
             tasks: self.tasks.as_deref().unwrap_or(&[]),
         };
         let refresh_secs = u64::from(self.refresh_minutes) * 60;
         let accounts = merge::build(&outcomes, &mut self.last, &ctx, refresh_secs, now_ms);
         self.snapshot = Snapshot {
+            services: quotaglass_core::summary::build(&accounts),
             accounts,
             generated_at_ms: now_ms,
         };
@@ -363,8 +389,8 @@ impl Shared {
         (self.emit)(&st.snapshot);
     }
 
-    /// One fetch of one task. Returns false when the fetch failed. A gone source counts as success for the backoff.
-    async fn run_one(&self, task: &TaskSpec) -> bool {
+    /// One fetch of one task. A gone source counts as success for the backoff.
+    async fn run_one(&self, task: &TaskSpec) -> StepResult {
         let provider = &task.provider;
         let result = if task.profile_dir.as_ref().is_some_and(|d| !d.is_dir()) {
             Some(Err(FetchError::ProfileMissing))
@@ -373,7 +399,13 @@ impl Shared {
         } else {
             settle(provider.fetch(&self.env).await)
         };
-        let ok = !matches!(result, Some(Err(_)));
+        let step = match &result {
+            Some(Err(FetchError::RateLimited { retry_after_secs })) => {
+                StepResult::RateLimited(*retry_after_secs)
+            }
+            Some(Err(_)) => StepResult::Failed,
+            _ => StepResult::Ok,
+        };
         if let Some(Err(e)) = &result {
             tracing::warn!(source = ?provider.kind(), service = ?provider.service(), error = ?e, "source fetch failed");
         }
@@ -389,11 +421,13 @@ impl Shared {
         if st.record(&task.id, outcome) {
             self.publish(&mut st);
         }
-        ok
+        step
     }
 }
 
 impl Scheduler {
+    /// `emit` runs inside `apply` on the caller's thread, and callers hold the settings lock there:
+    /// `emit` must never take the settings lock.
     pub fn new(env: Env, emit: impl Fn(&Snapshot) + Send + Sync + 'static) -> Self {
         let state = State::new((env.now_ms)());
         Self {
@@ -447,8 +481,8 @@ impl Scheduler {
         for t in tasks.drain(..) {
             t.handle.abort();
         }
-        let base = u64::from(refresh_minutes) * 60;
         for e in plan {
+            let base = e.base_secs(refresh_minutes);
             let spec = Arc::new(TaskSpec {
                 provider: e.provider(&self.shared.env),
                 profile_dir: e.profile_dir(),
@@ -472,7 +506,7 @@ impl Scheduler {
                 let shared = shared.clone();
                 async move {
                     shared.publish(&mut lock(&shared.state));
-                    true
+                    StepResult::Ok
                 }
             }));
         tasks.push(Task { wake, handle });
@@ -506,7 +540,7 @@ mod tests {
             let counter = counter.clone();
             async move {
                 counter.fetch_add(1, Ordering::SeqCst);
-                true
+                StepResult::Ok
             }
         }));
 
@@ -524,6 +558,138 @@ mod tests {
             2,
             "one run after the long sleep, not one per missed tick"
         );
+        task.abort();
+    }
+
+    #[test]
+    fn claude_floor_is_300_even_when_refresh_is_1_minute() {
+        let e = |target| Entry {
+            id: "x".into(),
+            target,
+        };
+        assert_eq!(e(Target::ClaudeCurrent).base_secs(1), 300);
+        assert_eq!(
+            e(Target::ClaudeProfile(PathBuf::from("C:/p"))).base_secs(1),
+            300
+        );
+        assert_eq!(e(Target::ClaudeCurrent).base_secs(10), 600);
+        // The card's countdown uses the same base as the timer.
+        let mut st = State::new(NOW);
+        st.take_settings(&Settings {
+            connected: vec![Connection::ClaudeCurrent],
+            refresh_minutes: 1,
+            ..Settings::default()
+        });
+        assert_eq!(st.tasks.as_ref().unwrap()[0].base_secs, 300);
+    }
+
+    #[test]
+    fn non_claude_follows_refresh() {
+        let e = |target| Entry {
+            id: "x".into(),
+            target,
+        };
+        assert_eq!(e(Target::CodexCurrent).base_secs(1), 60);
+        assert_eq!(e(Target::AntigravityApp).base_secs(2), 120);
+        assert_eq!(
+            e(Target::CodexProfile(PathBuf::from("C:/p"))).base_secs(5),
+            300
+        );
+    }
+
+    #[test]
+    fn refresh_change_updates_task_base() {
+        let mut st = State::new(NOW);
+        let mut s = Settings {
+            connected: vec![Connection::CodexCurrent],
+            refresh_minutes: 1,
+            ..Settings::default()
+        };
+        st.take_settings(&s);
+        s.refresh_minutes = 5;
+        st.take_settings(&s);
+        assert_eq!(st.tasks.as_ref().unwrap()[0].base_secs, 300);
+    }
+
+    /// Runs a loop whose step always gives `result`, and returns the run counter.
+    fn counting_loop(
+        base: u64,
+        wake: Arc<Notify>,
+        result: StepResult,
+    ) -> (Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counter = runs.clone();
+        let task = tokio::spawn(run_loop(base, wake, move || {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                result
+            }
+        }));
+        (runs, task)
+    }
+
+    async fn settle_tasks() {
+        for _ in 0..5 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rate_limited_waits_retry_after_not_backoff() {
+        let (runs, task) = counting_loop(
+            300,
+            Arc::new(Notify::new()),
+            StepResult::RateLimited(Some(600)),
+        );
+        settle_tasks().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        tokio::time::advance(Duration::from_secs(599)).await;
+        settle_tasks().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "no second run before 600 s");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        settle_tasks().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "one run after 600 s");
+        // The backoff does not double: the third run is again 600 s later, not 1200 s.
+        tokio::time::advance(Duration::from_secs(600)).await;
+        settle_tasks().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 3);
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rate_limited_below_base_waits_base() {
+        let (runs, task) = counting_loop(
+            300,
+            Arc::new(Notify::new()),
+            StepResult::RateLimited(Some(120)),
+        );
+        settle_tasks().await;
+        tokio::time::advance(Duration::from_secs(299)).await;
+        settle_tasks().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "Retry-After 120 < base 300");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        settle_tasks().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wake_bypasses_wait() {
+        let wake = Arc::new(Notify::new());
+        let (runs, task) = counting_loop(300, wake.clone(), StepResult::RateLimited(Some(900)));
+        settle_tasks().await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        wake.notify_one();
+        settle_tasks().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "manual retry runs at once");
+        // After the manual run, the wait starts again from that run.
+        tokio::time::advance(Duration::from_secs(899)).await;
+        settle_tasks().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        tokio::time::advance(Duration::from_secs(2)).await;
+        settle_tasks().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 3);
         task.abort();
     }
 
@@ -637,14 +803,12 @@ mod tests {
         assert!(st.take_settings(&s).is_none());
 
         s.labels.insert("claude:x".into(), "Work".into());
-        s.pinned_accounts = vec!["claude:x".into()];
         s.hidden_accounts = vec!["claude:y".into()];
         assert!(
             st.take_settings(&s).is_none(),
-            "labels, pins and hidden only republish"
+            "labels and hidden only republish"
         );
         assert_eq!(st.labels.get("claude:x").map(String::as_str), Some("Work"));
-        assert_eq!(st.pinned, ["claude:x"]);
         assert_eq!(st.hidden, ["claude:y"]);
 
         s.refresh_minutes = 5;
@@ -805,8 +969,9 @@ mod tests {
             state: Mutex::new(state),
         };
 
-        assert!(
-            !shared.run_one(&spec).await,
+        assert_eq!(
+            shared.run_one(&spec).await,
+            StepResult::Failed,
             "a missing folder is a failure"
         );
         let snapshot = lock(&shared.state).snapshot.clone();

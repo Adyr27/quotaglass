@@ -7,4 +7,31 @@
 *.log
 .env
 .env.*
+!.env.example
+
+# agent and tool folders: never publish
 .superpowers/
+.claude/
+.impeccable/
+.mcp.json
+
+# Local links to the KB: never publish
+/kb/
+/AGENTS.md
+/CLAUDE.md
+/PRODUCT.md
+/DESIGN.md
+
+# key material: never publish
+*.pem
+*.key
+*.jks
+*.pfx
+*.p12
+*.pdb
+
+# editor and OS files
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

@@ -18,6 +18,34 @@ pub fn fast_burn(used: f64, passed: Option<f64>) -> bool {
     passed.is_some_and(|p| used >= 1.5 * p) && used >= 20.0
 }
 
+/// Minutes until the bucket is full at its pace so far, rounded to a readable step: 5 min under an hour, then whole
+/// hours. `None` under the 20 % floor (as `fast_burn`), without a window length and a reset time, or when the limit
+/// would come at or after the reset.
+pub fn minutes_to_limit(b: &Bucket, now_ms: i64) -> Option<u32> {
+    let used = b.used_percent;
+    if !(20.0..100.0).contains(&used) {
+        return None;
+    }
+    let window_ms = b.window_secs? as f64 * 1000.0;
+    let left_ms = b.resets_at_ms?.saturating_sub(now_ms) as f64;
+    let elapsed_ms = window_ms - left_ms;
+    if left_ms <= 0.0 || elapsed_ms <= 0.0 {
+        return None;
+    }
+    // At a steady rate of used / elapsed, the rest of the bucket takes (100 - used) / rate.
+    let to_limit_ms = (100.0 - used) * elapsed_ms / used;
+    if to_limit_ms >= left_ms {
+        return None;
+    }
+    let mins = to_limit_ms / 60_000.0;
+    let rounded = if mins < 60.0 {
+        ((mins / 5.0).round() * 5.0).max(5.0)
+    } else {
+        (mins / 60.0).round() * 60.0
+    };
+    Some(rounded as u32)
+}
+
 /// The fullest bucket limits the account, so its headroom is the account's headroom.
 pub fn room_left(buckets: &[Bucket]) -> Option<f64> {
     buckets
@@ -95,6 +123,34 @@ mod tests {
         assert!(!fast_burn(44.0, Some(30.0)));
         assert!(!fast_burn(19.0, Some(5.0)));
         assert!(!fast_burn(90.0, None));
+    }
+
+    #[test]
+    fn minutes_to_limit_forecast() {
+        const NOW: i64 = 1_800_000_000_000;
+        const H: f64 = 3_600_000.0;
+        // `used` % of a 5 h window, `passed_h` hours in.
+        let b = |used, passed_h: f64| Bucket {
+            name: "5-hour".into(),
+            used_percent: used,
+            window_secs: Some(18_000),
+            resets_at_ms: Some(NOW + ((5.0 - passed_h) * H) as i64),
+        };
+        // Half used at half time: the limit comes with the reset, not before it.
+        assert_eq!(minutes_to_limit(&b(50.0, 2.5), NOW), None);
+        assert_eq!(minutes_to_limit(&b(60.0, 1.0), NOW), Some(40));
+        // Under the floor, and a limit already reached.
+        assert_eq!(minutes_to_limit(&b(15.0, 0.1), NOW), None);
+        assert_eq!(minutes_to_limit(&b(100.0, 1.0), NOW), None);
+        let no_reset = Bucket {
+            resets_at_ms: None,
+            ..b(60.0, 1.0)
+        };
+        assert_eq!(minutes_to_limit(&no_reset, NOW), None);
+        // 30 % after 0.975 h: about 136 min, shown as whole hours.
+        assert_eq!(minutes_to_limit(&b(30.0, 0.975), NOW), Some(120));
+        // About 3 min rounds to the 5 min step, never to 0.
+        assert_eq!(minutes_to_limit(&b(95.0, 1.0), NOW), Some(5));
     }
 
     #[test]

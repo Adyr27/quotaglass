@@ -70,6 +70,7 @@ mod tests {
             },
             reason: None,
             room_left: None,
+            forecast_mins: None,
             best_now: false,
             banked_resets: None,
             profile_id: None,

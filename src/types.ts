@@ -34,6 +34,8 @@ export interface AccountView {
   reason: string | null;
   /** 100 minus the highest used % over the limits that still hold. */
   roomLeft: number | null;
+  /** Minutes until the tightest limit is full at this pace, already rounded. Null when there is no forecast. */
+  forecastMins: number | null;
   bestNow: boolean;
   /** Codex only. Null when the source does not say. */
   bankedResets: number | null;

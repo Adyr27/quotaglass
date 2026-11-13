@@ -285,6 +285,7 @@ pub fn build(
             state,
             reason: Some(reason),
             room_left: None,
+            forecast_mins: None,
             best_now: false,
             banked_resets: None,
             profile_id: (role == TaskRole::AddedAccount).then(|| o.task_id.clone()),
@@ -459,6 +460,15 @@ fn card(
         .filter(|(_, v)| v.freshness != Freshness::Stale)
         .map(|(b, _)| b.clone())
         .collect();
+    // The forecast follows the tightest current limit, and only a live reading with no failed attempt since.
+    let forecast_mins = r
+        .buckets
+        .iter()
+        .zip(&buckets)
+        .filter(|(_, v)| v.freshness != Freshness::Stale)
+        .max_by(|(a, _), (b, _)| a.used_percent.total_cmp(&b.used_percent))
+        .filter(|(_, v)| v.freshness == Freshness::Live && failure.is_none())
+        .and_then(|(b, _)| pace::minutes_to_limit(b, now_ms));
     let (state, reason) = match (failure, buckets.is_empty()) {
         (Some(f), _) => f,
         (None, true) if r.key.service == Service::Antigravity => {
@@ -483,6 +493,7 @@ fn card(
         state,
         reason: (!reason.is_empty()).then_some(reason),
         room_left: pace::room_left(&current),
+        forecast_mins,
         best_now: false,
         banked_resets: r.banked_resets,
         profile_id: None,
@@ -1071,6 +1082,41 @@ mod tests {
         assert!(b[0].fast_burn);
         assert!(!b[1].fast_burn);
         assert!(cards[0].headline.as_ref().unwrap().fast_burn);
+    }
+
+    #[test]
+    fn forecast_only_from_a_live_reading() {
+        // 60 % after 1 h of 5 h: the limit is about 40 min away, well before the reset.
+        let read = |observed_at_ms| {
+            let mut r = reading(
+                Service::Claude,
+                E,
+                "claude-current",
+                SourceKind::Direct,
+                &[60.0, 10.0],
+            );
+            for b in &mut r.buckets {
+                b.resets_at_ms = Some(NOW + 4 * 3_600_000);
+            }
+            r.observed_at_ms = observed_at_ms;
+            r
+        };
+        let cards = run(
+            &[ok("claude-current", SourceKind::Direct, vec![read(NOW)])],
+            &mut LastReadings::default(),
+        );
+        assert_eq!(cards[0].forecast_mins, Some(40));
+        // Older than two refresh intervals: aged, so no forecast.
+        let cards = run(
+            &[ok(
+                "claude-current",
+                SourceKind::Direct,
+                vec![read(NOW - 600_000)],
+            )],
+            &mut LastReadings::default(),
+        );
+        assert_eq!(cards[0].buckets[0].freshness, Freshness::Aged);
+        assert_eq!(cards[0].forecast_mins, None);
     }
 
     #[test]

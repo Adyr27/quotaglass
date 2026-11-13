@@ -843,6 +843,16 @@ button {
   font-size: 12px;
 }
 
+.forecast {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.forecast[data-warn="true"] {
+  color: var(--warn);
+}
+
 .seg {
   display: inline-flex;
   padding: 2px;

@@ -180,6 +180,7 @@ mod tests {
             state: CardState::Ok,
             reason: None,
             room_left: None,
+            forecast_mins: None,
             best_now: false,
             banked_resets: None,
             profile_id: None,

@@ -3,7 +3,7 @@
 // never takes focus away; the strips are rebuilt because nothing in them takes focus.
 
 import type { AccountView, BucketView } from "../types";
-import { resetText, sentenceCase, SERVICE_NAME, stateText, updatedText, usedWhole } from "../format";
+import { forecastText, resetText, sentenceCase, SERVICE_NAME, stateText, updatedText, usedWhole } from "../format";
 import { h, iconRefresh, setAttr, setText, show, syncChildren } from "./dom";
 import { createStrip } from "./strip";
 
@@ -50,6 +50,7 @@ export function createDetail(deps: DetailDeps): Detail {
   const state = h("p", { class: "detail-state" });
   const signIn = h("button", { class: "btn btn-primary", type: "button" });
   const stateRow = h("div", { class: "detail-state-row" }, [state, signIn]);
+  const forecast = h("p", { class: "forecast" });
   const limits = h("div", { class: "limits" });
   const bankedText = h("span", { class: "num" });
   const redeem = h("button", { class: "btn", type: "button" }, ["Redeem"]);
@@ -72,7 +73,7 @@ export function createDetail(deps: DetailDeps): Detail {
   const body = h("div", { class: "detail-body" }, [h("header", { class: "detail-head" }, [
     h("div", { class: "detail-title" }, [h("div", { class: "detail-title-row" }, [name, best]), meta]),
     refresh,
-  ]), stateRow, limits, banked, actions, confirm]);
+  ]), stateRow, forecast, limits, banked, actions, confirm]);
   const el = h("section", { class: "detail", "aria-labelledby": "detail-title" }, [empty, body]);
 
   const closeConfirm = (): void => {
@@ -127,6 +128,11 @@ export function createDetail(deps: DetailDeps): Detail {
       setText(signIn, label ?? "");
       show(signIn, label !== null);
       show(stateRow, text !== null || label !== null);
+
+      const line = forecastText(account.forecastMins);
+      setText(forecast, line ?? "");
+      show(forecast, line !== null);
+      forecast.dataset.warn = String((account.forecastMins ?? 0) < 30);
 
       syncChildren(limits, account.buckets.map((b) => limitRow(b, account, nowMs)));
 

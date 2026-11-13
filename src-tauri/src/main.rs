@@ -69,6 +69,9 @@ fn main() {
                 notify::on_snapshot(&handle, &handle.state::<Warnings>(), snapshot);
                 reset_notify::on_snapshot(&handle, snapshot);
             });
+            scheduler.keep_readings(JsonStore::new(
+                JsonStore::in_appdata("readings.json").ok_or("APPDATA is not set")?,
+            ));
 
             app.manage(AppState {
                 settings: Mutex::new(settings.clone()),

@@ -66,7 +66,7 @@ export function sentenceCase(value: string): string {
 export function stateText(a: AccountView): string | null {
   switch (a.state) {
     case "loginExpired":
-      return "Login expired.";
+      return a.reason ?? "Login expired.";
     case "profileMissing":
       return "Profile folder missing.";
     case "noReadingYet":

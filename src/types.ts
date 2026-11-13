@@ -143,7 +143,7 @@ export interface Detected {
 }
 
 /** A page the app may open in the browser. The UI names it; the app holds the URL. */
-export type UrlTarget = "openAiUsage";
+export type UrlTarget = "openAiUsage" | "claudeUsage";
 
 export interface BackdropPayload {
   acrylic: boolean;

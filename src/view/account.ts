@@ -1,5 +1,5 @@
-// The right pane: the selected account. Name, plan and freshness, one pace strip per limit, the
-// Codex banked resets, and the actions. Buttons are built once and updated in place, so a refresh
+// The right pane: the selected account. Name, plan and freshness, one pace strip per limit, and
+// the actions. Codex banked resets live in the popover's Resets block. Buttons are built once and updated in place, so a refresh
 // never takes focus away; the strips are rebuilt because nothing in them takes focus.
 
 import type { AccountView, BucketView } from "../types";
@@ -13,7 +13,6 @@ export interface DetailDeps {
   onHide(account: AccountView): void;
   /** Login expired or not finished: sign in again (current login) or open the CLI with the profile. */
   onSignIn(account: AccountView): void;
-  onRedeem(): void;
 }
 
 export interface Detail {
@@ -52,9 +51,6 @@ export function createDetail(deps: DetailDeps): Detail {
   const stateRow = h("div", { class: "detail-state-row" }, [state, signIn]);
   const forecast = h("p", { class: "forecast" });
   const limits = h("div", { class: "limits" });
-  const bankedText = h("span", { class: "num" });
-  const redeem = h("button", { class: "btn", type: "button" }, ["Redeem"]);
-  const banked = h("p", { class: "banked" }, [bankedText, redeem]);
 
   const best = h("span", { class: "best" }, ["Best now"]);
   const refresh = h("button", { class: "icon-btn", type: "button", "aria-label": "Refresh", title: "Refresh" }, [iconRefresh()]);
@@ -73,7 +69,7 @@ export function createDetail(deps: DetailDeps): Detail {
   const body = h("div", { class: "detail-body" }, [h("header", { class: "detail-head" }, [
     h("div", { class: "detail-title" }, [h("div", { class: "detail-title-row" }, [name, best]), meta]),
     refresh,
-  ]), stateRow, forecast, limits, banked, actions, confirm]);
+  ]), stateRow, forecast, limits, actions, confirm]);
   const el = h("section", { class: "detail", "aria-labelledby": "detail-title" }, [empty, body]);
 
   const closeConfirm = (): void => {
@@ -83,7 +79,6 @@ export function createDetail(deps: DetailDeps): Detail {
 
   refresh.addEventListener("click", () => deps.onRefresh());
   signIn.addEventListener("click", () => current !== null && deps.onSignIn(current));
-  redeem.addEventListener("click", () => deps.onRedeem());
   remove.addEventListener("click", () => {
     if (current === null) return;
     if (current.profileId === null) {
@@ -135,9 +130,6 @@ export function createDetail(deps: DetailDeps): Detail {
       forecast.dataset.warn = String((account.forecastMins ?? 0) < 30);
 
       syncChildren(limits, account.buckets.map((b) => limitRow(b, account, nowMs)));
-
-      show(banked, account.service === "codex" && account.bankedResets !== null);
-      setText(bankedText, `Banked resets: ${account.bankedResets ?? 0}`);
 
       show(best, account.bestNow);
       refresh.classList.toggle("is-busy", refreshing);

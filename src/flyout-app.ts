@@ -80,6 +80,7 @@ export function startFlyout(): void {
     onHide: (a) => void takeSettings(setHidden(a.id, true)),
     onSignIn: (a) => void (a.profileId === null ? connect(a.service) : openCli(a.id)),
     onRedeem: () => void openUrl("openAiUsage"),
+    onClaudeUsage: () => void openUrl("claudeUsage"),
     onAdd: (service) => void takeSettings(addAccount(service)),
     onPatch: (patch) => void takeSettings(updateSettings(patch)),
     onSource: (c, on) => void takeSettings(connectSource(c, on)),

@@ -1,5 +1,6 @@
 // The click popover: accounts grouped by service (clicked service first), one expanded row at a
-// time, a footer (Add account, Pin pill, Settings), and the Settings and First pages in place.
+// time, a Resets block (Codex first, then Claude), a footer (Add account, Pin pill, Settings), and
+// the Settings and First pages in place.
 
 import type { AccountView, Connection, Detected, FlyoutView, Service, Settings, SettingsPatch } from "../types";
 import { SERVICE_NAME, SERVICE_ORDER, stateText, usedWhole, visibleAccounts, worstUsed } from "../format";
@@ -14,6 +15,7 @@ export interface PopoverDeps {
   onHide(account: AccountView): void;
   onSignIn(account: AccountView): void;
   onRedeem(): void;
+  onClaudeUsage(): void;
   onAdd(service: Service): void;
   onPatch(patch: SettingsPatch): void;
   onSource(c: Connection, on: boolean): void;
@@ -43,12 +45,18 @@ export interface Popover {
 
 type Page = "list" | "settings" | "first";
 
+/** Rows for an account whose numbers may be old: same rule for the account list and the Resets block. */
+function dimmed(a: AccountView): boolean {
+  return a.state === "loginExpired" || a.state === "profileMissing" || a.freshness === "stale";
+}
+
 export function createPopover(deps: PopoverDeps): Popover {
   let page: Page = "list";
   let service: Service | null = null;
   let expandedId: string | null = null;
   let last: PopoverData | null = null;
   const rows = new Map<string, { row: HTMLButtonElement; pct: HTMLElement; name: HTMLElement; best: HTMLElement }>();
+  const resetRows = new Map<string, { row: HTMLElement; name: HTMLElement; count: HTMLElement; note: HTMLElement; redeem: HTMLElement }>();
   const heads = new Map<Service, HTMLElement>();
 
   const detail = createDetail({
@@ -56,7 +64,6 @@ export function createPopover(deps: PopoverDeps): Popover {
     onRemove: deps.onRemove,
     onHide: deps.onHide,
     onSignIn: deps.onSignIn,
-    onRedeem: deps.onRedeem,
   });
   const first = createFirst(deps.onConnectFirst);
   const settingsView = createSettings({
@@ -68,6 +75,14 @@ export function createPopover(deps: PopoverDeps): Popover {
   });
 
   const list = h("div", { class: "pop-list" });
+  // Codex does not say what a reset restores, so every count gets the same check line.
+  const claudeUsage = h("button", { class: "btn", type: "button" }, ["Check limit resets"]);
+  const claudeReset = h("div", { class: "reset-row" }, [providerMark("claude"), h("span", { class: "option-name" }, [SERVICE_NAME.claude]), claudeUsage]);
+  const resetList = h("div", { class: "reset-list" });
+  const resets = h("section", { class: "resets", "aria-labelledby": "resets-title" }, [
+    h("div", { class: "group-head", id: "resets-title" }, ["Resets"]),
+    resetList,
+  ]);
   const addButton = h("button", { class: "btn btn-quiet", type: "button", "aria-expanded": "false" }, ["+ Add account"]);
   const addClaude = h("button", { class: "btn", type: "button" }, ["Claude"]);
   const addCodex = h("button", { class: "btn", type: "button" }, ["Codex"]);
@@ -79,7 +94,7 @@ export function createPopover(deps: PopoverDeps): Popover {
   const pinButton = h("button", { class: "btn btn-quiet", type: "button", "aria-pressed": "false" }, [iconPin(), pinText]);
   const settingsButton = h("button", { class: "btn btn-quiet", type: "button" }, [iconSliders(), "Settings"]);
   const foot = h("div", { class: "pop-foot" }, [addButton, pinButton, settingsButton]);
-  const listPage = h("div", { class: "pop-page" }, [list, choice, foot]);
+  const listPage = h("div", { class: "pop-page" }, [list, resets, choice, foot]);
   const el = h("div", { class: "popover" }, [listPage, first.el, settingsView.el]);
 
   const toggleChoice = (open: boolean): void => {
@@ -108,6 +123,7 @@ export function createPopover(deps: PopoverDeps): Popover {
     addButton.focus();
   });
   pinButton.addEventListener("click", () => deps.onTogglePin());
+  claudeUsage.addEventListener("click", () => deps.onClaudeUsage());
   settingsButton.addEventListener("click", () => go("settings"));
 
   function go(next: Page): void {
@@ -151,8 +167,29 @@ export function createPopover(deps: PopoverDeps): Popover {
     setText(entry.pct, used === null ? "—" : `${usedWhole(used)}%`);
     show(entry.best, a.bestNow);
     setAttr(entry.row, "aria-expanded", String(a.id === expandedId));
-    entry.row.dataset.dim = String(a.state === "loginExpired" || a.state === "profileMissing" || a.freshness === "stale");
+    entry.row.dataset.dim = String(dimmed(a));
     setAttr(entry.row, "title", stateText(a));
+    return entry.row;
+  }
+
+  /** One Codex account in the Resets block. Built once per account, so a refresh keeps focus on Redeem. */
+  function resetRowFor(a: AccountView, count: number): HTMLElement {
+    let entry = resetRows.get(a.id);
+    if (entry === undefined) {
+      const name = h("span", { class: "option-name" });
+      const countText = h("span", { class: "num" });
+      const redeem = h("button", { class: "btn", type: "button" }, ["Redeem"]);
+      redeem.addEventListener("click", () => deps.onRedeem());
+      const note = h("p", { class: "set-note" }, ["Check what this reset restores before you use it."]);
+      const row = h("div", { class: "reset-row" }, [providerMark("codex"), name, countText, redeem, note]);
+      entry = { row, name, count: countText, note, redeem };
+      resetRows.set(a.id, entry);
+    }
+    setText(entry.name, a.label);
+    setText(entry.count, count === 0 ? "No resets" : count === 1 ? "1 reset" : `${count} resets`);
+    show(entry.note, count > 0);
+    show(entry.redeem, count > 0);
+    entry.row.dataset.dim = String(dimmed(a));
     return entry.row;
   }
 
@@ -192,6 +229,13 @@ export function createPopover(deps: PopoverDeps): Popover {
     if (wanted.length === 0) wanted.push(h("p", { class: "set-note" }, ["No accounts yet."]));
     detail.update(visible.find((a) => a.id === expandedId) ?? null, last.nowMs, last.refreshing);
     syncChildren(list, wanted);
+
+    const codex = visible.filter((a) => a.service === "codex" && a.bankedResets !== null);
+    for (const id of resetRows.keys()) if (!codex.some((a) => a.id === id)) resetRows.delete(id);
+    const resetWanted = codex.map((a) => resetRowFor(a, a.bankedResets ?? 0));
+    if (visible.some((a) => a.service === "claude")) resetWanted.push(claudeReset);
+    show(resets, resetWanted.length > 0);
+    syncChildren(resetList, resetWanted);
 
     first.update(last.detected);
     if (settings !== null) settingsView.update(settings, last.detected, accounts);

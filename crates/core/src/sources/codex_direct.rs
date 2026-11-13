@@ -75,10 +75,11 @@ impl Provider for CodexDirect {
     }
 }
 
-struct Auth {
-    token: Secret,
-    id_token: Option<String>,
-    account_id: Option<String>,
+/// What `auth.json` says about the active login.
+pub struct Auth {
+    pub token: Secret,
+    pub id_token: Option<String>,
+    pub account_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -96,7 +97,7 @@ struct Tokens {
 }
 
 /// A missing file is `NotDetected`. Bad JSON, or a missing `tokens` block or `access_token`, is a `Format` error.
-fn read_auth(codex_dir: &Path) -> Result<Auth, FetchError> {
+pub fn read_auth(codex_dir: &Path) -> Result<Auth, FetchError> {
     let raw = Zeroizing::new(std::fs::read(codex_dir.join("auth.json")).map_err(
         |e| match e.kind() {
             ErrorKind::NotFound => FetchError::NotDetected,

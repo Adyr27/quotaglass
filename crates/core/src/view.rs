@@ -60,7 +60,7 @@ pub struct AccountView {
     pub reason: Option<String>,
     /// `100 - max(used %)` over the buckets that are not stale.
     pub room_left: Option<f64>,
-    /// Minutes until the tightest limit is full at this pace (`pace::minutes_to_limit`). Only from a live reading.
+    /// Minutes until the first limit runs out at this pace (`pace::minutes_to_limit`). Only from a live reading.
     pub forecast_mins: Option<u32>,
     /// The account with the most room left now (`pace::best_now`).
     pub best_now: bool,

@@ -460,15 +460,15 @@ fn card(
         .filter(|(_, v)| v.freshness != Freshness::Stale)
         .map(|(b, _)| b.clone())
         .collect();
-    // The forecast follows the tightest current limit, and only a live reading with no failed attempt since.
+    // The limit that runs out first, not the fullest one: a 5 h limit can run out before a fuller weekly one.
+    // Only from a live reading with no failed attempt since.
     let forecast_mins = r
         .buckets
         .iter()
         .zip(&buckets)
-        .filter(|(_, v)| v.freshness != Freshness::Stale)
-        .max_by(|(a, _), (b, _)| a.used_percent.total_cmp(&b.used_percent))
         .filter(|(_, v)| v.freshness == Freshness::Live && failure.is_none())
-        .and_then(|(b, _)| pace::minutes_to_limit(b, now_ms));
+        .filter_map(|(b, _)| pace::minutes_to_limit(b, now_ms))
+        .min();
     let (state, reason) = match (failure, buckets.is_empty()) {
         (Some(f), _) => f,
         (None, true) if r.key.service == Service::Antigravity => {
@@ -1103,6 +1103,19 @@ mod tests {
         };
         let cards = run(
             &[ok("claude-current", SourceKind::Direct, vec![read(NOW)])],
+            &mut LastReadings::default(),
+        );
+        assert_eq!(cards[0].forecast_mins, Some(40));
+        // A fuller weekly limit that only fills after its reset does not hide the 5 h limit that runs out first.
+        let mut r = read(NOW);
+        r.buckets[1] = Bucket {
+            name: "weekly".into(),
+            used_percent: 85.0,
+            window_secs: Some(604_800),
+            resets_at_ms: Some(NOW + 8 * 3_600_000),
+        };
+        let cards = run(
+            &[ok("claude-current", SourceKind::Direct, vec![r])],
             &mut LastReadings::default(),
         );
         assert_eq!(cards[0].forecast_mins, Some(40));

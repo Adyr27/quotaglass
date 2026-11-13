@@ -123,6 +123,19 @@ fn resized_rect(now: WindowRect, w: u32, h: u32, screen: &Screen) -> WindowRect 
     )
 }
 
+/// The saved place at the current size, keeping its left edge and vertical centre like `resized_rect`:
+/// a grip resize is not saved, so the saved rect can still hold the old size.
+fn restored_rect(saved: WindowRect, w: u32, h: u32, monitors: &[MonitorRect]) -> WindowRect {
+    let centre = i64::from(saved.y) + i64::from(saved.height) / 2;
+    let sized = WindowRect {
+        x: saved.x,
+        y: (centre - i64::from(h) / 2) as i32,
+        width: w,
+        height: h,
+    };
+    clamp_to_monitors(sized, monitors)
+}
+
 fn contains(m: &MonitorRect, x: i64, y: i64) -> bool {
     x >= i64::from(m.x)
         && x < i64::from(m.x) + i64::from(m.width)
@@ -255,12 +268,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let start = match settings.pill_position {
         Some(saved) => screen_for(&window, saved).map(|s| {
             let (width, height) = size(&s);
-            let sized = WindowRect {
-                width,
-                height,
-                ..saved
-            };
-            clamp_to_monitors(sized, &monitor_rects(&window))
+            restored_rect(saved, width, height, &monitor_rects(&window))
         }),
         None => window
             .primary_monitor()?
@@ -796,5 +804,16 @@ mod tests {
         // No code move since the last settled move: a user drag, save it.
         assert!(should_save_after(1, 1));
         assert!(should_save_after(0, 0));
+    }
+
+    #[test]
+    fn restore_keeps_left_edge_and_centre() {
+        // Saved at 104×32, then the grip made it 125×38 around the same centre (a code move, not saved).
+        let saved = rect(800, 1000, 104, 32);
+        let r = restored_rect(saved, 125, 38, &[PRIMARY]);
+        assert_eq!((r.x, r.y, r.width, r.height), (800, 997, 125, 38));
+        // On the taskbar strip it stays on the strip.
+        let strip = restored_rect(rect(800, 1044, 104, 32), 125, 38, &[PRIMARY]);
+        assert!(strip.y >= 1040 && strip.y + 38 <= 1080, "{strip:?}");
     }
 }

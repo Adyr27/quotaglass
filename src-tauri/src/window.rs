@@ -74,6 +74,12 @@ fn next_scale(locked: bool, requested: f64) -> Option<f64> {
     (!locked).then(|| clamp_scale(requested))
 }
 
+/// `code_move_gen` counts `place` moves of the pill; `event_gen` is that count when the last move settled.
+/// A change in between means the code moved the pill, so only a user drag saves a position.
+fn should_save_after(code_move_gen: u64, event_gen: u64) -> bool {
+    code_move_gen == event_gen
+}
+
 /// A locked or minimized pill never saves a new position.
 fn should_save_position(locked: bool, minimized: bool) -> bool {
     !locked && !minimized
@@ -102,8 +108,8 @@ pub fn fit_in(r: WindowRect, work: MonitorRect) -> WindowRect {
     }
 }
 
-/// A resized pill keeps its left edge and vertical centre, then stays inside `work`.
-pub fn resized_rect(now: WindowRect, w: u32, h: u32, work: MonitorRect) -> WindowRect {
+/// A resized pill keeps its left edge and vertical centre, then stays on its monitor.
+fn resized_rect(now: WindowRect, w: u32, h: u32, screen: &Screen) -> WindowRect {
     let centre = i64::from(now.y) + i64::from(now.height) / 2;
     let y = (centre - i64::from(h) / 2) as i32;
     fit_in(
@@ -113,7 +119,7 @@ pub fn resized_rect(now: WindowRect, w: u32, h: u32, work: MonitorRect) -> Windo
             width: w,
             height: h,
         },
-        work,
+        screen.full,
     )
 }
 
@@ -134,6 +140,8 @@ pub struct WindowState {
     dark: AtomicBool,
     /// The UI's zoom (device px per CSS px) as f64 bits; 0 until the UI reports it.
     zoom: AtomicU64,
+    /// Counts `place` moves of the pill, so the debounced save can skip them.
+    code_moves: AtomicU64,
 }
 
 fn slots(ws: &WindowState) -> u32 {
@@ -216,6 +224,10 @@ fn current_rect(window: &WebviewWindow) -> tauri::Result<WindowRect> {
 }
 
 pub fn place(window: &WebviewWindow, r: WindowRect) -> tauri::Result<()> {
+    if window.label() == "main" {
+        let ws = window.state::<WindowState>();
+        ws.code_moves.fetch_add(1, Ordering::SeqCst);
+    }
     window.set_size(PhysicalSize::new(r.width, r.height))?;
     window.set_position(PhysicalPosition::new(r.x, r.y))
 }
@@ -264,6 +276,8 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
 
     // Moved and Resized fire many times per drag: save once the window has been still for 500 ms.
     let generation = Arc::new(AtomicU64::new(0));
+    // Starts at the count after the start `place`, which fired before this handler existed.
+    let settled = Arc::new(AtomicU64::new(ws.code_moves.load(Ordering::SeqCst)));
     let handle = app.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::ThemeChanged(_) => {
@@ -279,11 +293,12 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
             let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
             let generation = generation.clone();
+            let settled = settled.clone();
             let handle = handle.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(SAVE_DELAY).await;
                 if generation.load(Ordering::SeqCst) == mine {
-                    save_current(&handle);
+                    save_current(&handle, &settled);
                 }
             });
         }
@@ -493,7 +508,7 @@ fn resize(app: &AppHandle) -> tauri::Result<()> {
         return Ok(());
     };
     let (w, h) = pill_px_size(slots(&ws), scale, zoom(app, screen.scale));
-    let next = resized_rect(now, w, h, screen.work);
+    let next = resized_rect(now, w, h, &screen);
     if next != now {
         place(&window, next)?;
     }
@@ -518,7 +533,8 @@ pub fn set_pill_slots(app: &AppHandle, count: u32) -> tauri::Result<()> {
     resize(app)
 }
 
-/// The grip: a new scale, ignored while locked. The debounced move/resize save writes it to disk.
+/// The grip: a new scale, ignored while locked. Saved here: the resize that follows is a code move, which the
+/// debounced save skips.
 pub fn set_pill_scale(app: &AppHandle, scale: f64) -> tauri::Result<()> {
     {
         let state = app.state::<AppState>();
@@ -526,6 +542,9 @@ pub fn set_pill_scale(app: &AppHandle, scale: f64) -> tauri::Result<()> {
         match next_scale(s.pill_locked, scale) {
             Some(next) if next != s.pill_scale => s.pill_scale = next,
             _ => return Ok(()),
+        }
+        if state.store.save(&s).is_err() {
+            tracing::warn!("could not save the pill scale");
         }
     }
     resize(app)
@@ -553,7 +572,11 @@ pub fn set_pill_locked(app: &AppHandle, locked: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn save_current(app: &AppHandle) {
+fn save_current(app: &AppHandle, settled: &AtomicU64) {
+    let code_moves = app.state::<WindowState>().code_moves.load(Ordering::SeqCst);
+    if !should_save_after(code_moves, settled.swap(code_moves, Ordering::SeqCst)) {
+        return;
+    }
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
@@ -734,18 +757,44 @@ mod tests {
         assert!(should_save_position(false, false));
     }
 
+    /// The primary monitor with a 40 px taskbar strip at the bottom.
+    const SCREEN: Screen = Screen {
+        full: PRIMARY,
+        work: WORK,
+        scale: 1.0,
+    };
+
     #[test]
     fn resize_keeps_left_edge_and_centre() {
         let now = rect(1000, 900, 104, 32);
         assert_eq!(
-            resized_rect(now, 166, 51, WORK),
+            resized_rect(now, 166, 51, &SCREEN),
             rect(1000, 916 - 25, 166, 51)
         );
-        // Grown past the right edge: moved back inside the work area.
+        // Grown past the right edge: moved back onto the monitor.
         let edge = rect(1880, 900, 40, 32);
-        assert_eq!(resized_rect(edge, 104, 32, WORK).x, 1920 - 104);
-        // Off the bottom: moved up.
-        let low = rect(0, 1030, 104, 32);
-        assert_eq!(resized_rect(low, 104, 32, WORK).y, 1040 - 32);
+        assert_eq!(resized_rect(edge, 104, 32, &SCREEN).x, 1920 - 104);
+        // Off the bottom of the monitor: moved up.
+        let low = rect(0, 1060, 104, 32);
+        assert_eq!(resized_rect(low, 104, 32, &SCREEN).y, 1080 - 32);
+    }
+
+    #[test]
+    fn resize_keeps_a_pill_on_the_taskbar_strip() {
+        // The user put the pill on the strip below the work area. A new scale makes it bigger.
+        let strip = rect(800, 1044, 104, 32);
+        let next = resized_rect(strip, 125, 38, &SCREEN);
+        assert!(next.y >= 1040, "still on the strip, got y = {}", next.y);
+        assert!(next.y + 38 <= 1080, "still on the monitor, got y = {}", next.y);
+        assert_eq!(next.x, 800);
+    }
+
+    #[test]
+    fn only_a_user_move_saves() {
+        // `place` moved the pill since the last settled move: skip the save.
+        assert!(!should_save_after(1, 0));
+        // No code move since the last settled move: a user drag, save it.
+        assert!(should_save_after(1, 1));
+        assert!(should_save_after(0, 0));
     }
 }

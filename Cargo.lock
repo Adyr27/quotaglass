@@ -2971,7 +2971,7 @@ dependencies = [
 
 [[package]]
 name = "quotaglass"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "quotaglass-core",
  "serde",
@@ -2989,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "quotaglass-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "reqwest",

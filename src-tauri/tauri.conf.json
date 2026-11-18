@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "QuotaGlass",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "identifier": "com.adyr27.quotaglass",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -50,7 +50,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_UPDATER_PUBLIC_KEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGQUY2RDc2OTg0OTQxQ0EKUldUS1FVbVlkbTJ2M3hkb2gxNUpLU1lva21yRERUOW9GWXcrUkYvY1JyZFhHTXROZjNiNmI4WHkK",
       "endpoints": [
         "https://github.com/Adyr27/quotaglass/releases/latest/download/latest.json"
       ]

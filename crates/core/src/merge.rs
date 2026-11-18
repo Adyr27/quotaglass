@@ -6,10 +6,10 @@ use crate::pace;
 use crate::provider::SourceOutcome;
 use crate::ratelimit::rate_limit_wait_secs;
 use crate::view::{AccountView, BucketView, CardState, Freshness};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 const ANTIGRAVITY_HINT: &str = "Open Antigravity to see its limits";
-const LOGIN_EXPIRED: &str = "Login expired";
 const PROFILE_MISSING: &str = "Profile folder missing";
 const RATE_LIMITED_NO_READING: &str = "Rate limited. No reading yet.";
 
@@ -53,12 +53,91 @@ impl MergeCtx<'_> {
     }
 }
 
-/// Last successful reading per account, then per (source kind, task). Memory only; tasks refill it after a restart.
-/// The inner order is the source priority: `SourceKind` (Direct, AntigravityApp), then task ID.
+/// One stored reading as `readings.json` keeps it. No email, no token, no path: the card ID is already hashed, and
+/// `task_id` is a fixed name or a random profile ID.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedReading {
+    pub store_key: String,
+    pub service: Service,
+    pub task_id: String,
+    pub source: SourceKind,
+    pub label: String,
+    pub plan: Option<String>,
+    pub buckets: Vec<Bucket>,
+    pub observed_at_ms: i64,
+    pub banked_resets: Option<u32>,
+}
+
+/// Last successful reading per account, then per (source kind, task). The scheduler saves it, so a restart starts
+/// with the last numbers. The inner order is the source priority: `SourceKind` (Direct, AntigravityApp), then task ID.
 #[derive(Debug, Default)]
 pub struct LastReadings(HashMap<String, BTreeMap<(SourceKind, String), Reading>>);
 
 impl LastReadings {
+    /// Every stored reading, sorted, so two equal sets give equal lists.
+    pub fn to_saved(&self) -> Vec<SavedReading> {
+        let mut saved: Vec<SavedReading> = self
+            .0
+            .iter()
+            .flat_map(|(id, per_task)| {
+                per_task
+                    .iter()
+                    .map(move |((source, task), r)| SavedReading {
+                        store_key: id.clone(),
+                        service: r.key.service,
+                        task_id: task.clone(),
+                        source: *source,
+                        label: r.label.clone(),
+                        plan: r.plan.clone(),
+                        buckets: r.buckets.clone(),
+                        observed_at_ms: r.observed_at_ms,
+                        banked_resets: r.banked_resets,
+                    })
+            })
+            .collect();
+        saved.sort_by(|a, b| {
+            (&a.store_key, a.source, &a.task_id).cmp(&(&b.store_key, b.source, &b.task_id))
+        });
+        saved
+    }
+
+    /// The readings from `to_saved`. The key is rebuilt without the email, so its card ID equals the saved one. An
+    /// entry whose card ID does not start with its service is dropped.
+    pub fn from_saved(saved: Vec<SavedReading>) -> Self {
+        let mut last = Self::default();
+        for s in saved {
+            let Some(local) = s
+                .store_key
+                .strip_prefix(s.service.as_str())
+                .and_then(|rest| rest.strip_prefix(':'))
+            else {
+                continue;
+            };
+            let reading = Reading {
+                key: AccountKey::new(s.service, None, local),
+                label: s.label,
+                plan: s.plan,
+                buckets: s.buckets,
+                source: s.source,
+                observed_at_ms: s.observed_at_ms,
+                banked_resets: s.banked_resets,
+            };
+            last.0
+                .entry(s.store_key)
+                .or_default()
+                .insert((s.source, s.task_id), reading);
+        }
+        last
+    }
+
+    /// Keeps only the readings of tasks that `keep` accepts.
+    pub fn retain_tasks(&mut self, keep: impl Fn(&str) -> bool) {
+        for per_task in self.0.values_mut() {
+            per_task.retain(|(_, t), _| keep(t));
+        }
+        self.0.retain(|_, m| !m.is_empty());
+    }
+
     /// Drops every stored reading of a task that is gone (no longer detected, or removed), so its old numbers do not
     /// stay on screen. Returns true when it dropped something.
     pub fn forget(&mut self, task_id: &str) -> bool {
@@ -148,8 +227,14 @@ pub fn build(
                     base_secs: ctx.base_secs(task, refresh_secs),
                     now_ms,
                 };
-                failure_state(*kind, &e, !reading.buckets.is_empty(), wait)
-                    .unwrap_or((CardState::Error, e.reason()))
+                failure_state(
+                    *kind,
+                    reading.key.service,
+                    &e,
+                    !reading.buckets.is_empty(),
+                    wait,
+                )
+                .unwrap_or((CardState::Error, e.reason()))
             });
         let mut view = card(reading, failure, refresh_secs, now_ms);
         let tasks = per_task.keys().map(|(_, t)| t.as_str());
@@ -179,8 +264,8 @@ pub fn build(
             base_secs: ctx.base_secs(&o.task_id, refresh_secs),
             now_ms,
         };
-        let (state, reason) =
-            failure_state(o.kind, e, false, wait).unwrap_or((CardState::NoSource, e.reason()));
+        let (state, reason) = failure_state(o.kind, service, e, false, wait)
+            .unwrap_or((CardState::NoSource, e.reason()));
         let role = ctx.role(&o.task_id);
         // Reuse the card ID of a stored reading of this task, so labels, pins and hidden carry over. A task with a
         // stored reading is normally `covered` above; this keeps the ID right if that ever changes.
@@ -200,6 +285,7 @@ pub fn build(
             state,
             reason: Some(reason),
             room_left: None,
+            forecast_mins: None,
             best_now: false,
             banked_resets: None,
             profile_id: (role == TaskRole::AddedAccount).then(|| o.task_id.clone()),
@@ -295,17 +381,30 @@ fn rate_limited_text(retry_after: Option<u64>, w: Wait) -> String {
     }
 }
 
+/// "Updates when you next use Claude." QuotaGlass never renews a login; the service's own app does.
+fn updates_text(service: Service) -> String {
+    match service {
+        Service::Antigravity => "Updates when you next open Antigravity.".into(),
+        s => format!("Updates when you next use {}.", display_name(s)),
+    }
+}
+
 /// The states with their own wording. An expired login only counts for a single-account source.
 /// `has_reading`: the card still shows numbers from an earlier reading.
 fn failure_state(
     kind: SourceKind,
+    service: Service,
     e: &FetchError,
     has_reading: bool,
     wait: Wait,
 ) -> Option<(CardState, String)> {
     match e {
         FetchError::Expired if kind == SourceKind::Direct => {
-            Some((CardState::LoginExpired, LOGIN_EXPIRED.into()))
+            Some((CardState::LoginExpired, updates_text(service)))
+        }
+        // Antigravity closed: the scheduler keeps its last reading. Without one, `build` shows no card.
+        FetchError::NotDetected if kind == SourceKind::AntigravityApp => {
+            Some((CardState::NoSource, updates_text(service)))
         }
         FetchError::ProfileMissing => Some((CardState::ProfileMissing, PROFILE_MISSING.into())),
         FetchError::RateLimited { retry_after_secs } => Some((
@@ -361,6 +460,15 @@ fn card(
         .filter(|(_, v)| v.freshness != Freshness::Stale)
         .map(|(b, _)| b.clone())
         .collect();
+    // The limit that runs out first, not the fullest one: a 5 h limit can run out before a fuller weekly one.
+    // Only from a live reading with no failed attempt since.
+    let forecast_mins = r
+        .buckets
+        .iter()
+        .zip(&buckets)
+        .filter(|(_, v)| v.freshness == Freshness::Live && failure.is_none())
+        .filter_map(|(b, _)| pace::minutes_to_limit(b, now_ms))
+        .min();
     let (state, reason) = match (failure, buckets.is_empty()) {
         (Some(f), _) => f,
         (None, true) if r.key.service == Service::Antigravity => {
@@ -385,6 +493,7 @@ fn card(
         state,
         reason: (!reason.is_empty()).then_some(reason),
         room_left: pace::room_left(&current),
+        forecast_mins,
         best_now: false,
         banked_resets: r.banked_resets,
         profile_id: None,
@@ -885,7 +994,10 @@ mod tests {
             .unwrap();
         assert_eq!(expired.id, "claude:claude-current");
         assert_eq!(expired.label, "Claude");
-        assert_eq!(expired.reason.as_deref(), Some("Login expired"));
+        assert_eq!(
+            expired.reason.as_deref(),
+            Some("Updates when you next use Claude.")
+        );
         assert!(expired.current_login);
         assert_eq!(expired.room_left, None);
 
@@ -904,7 +1016,10 @@ mod tests {
             .find(|c| c.id == id_of(Service::Claude, "b@example.com"))
             .unwrap();
         assert_eq!(profile.state, CardState::LoginExpired);
-        assert_eq!(profile.reason.as_deref(), Some("Login expired"));
+        assert_eq!(
+            profile.reason.as_deref(),
+            Some("Updates when you next use Claude.")
+        );
         assert_eq!(profile.profile_id.as_deref(), Some("p1"));
     }
 
@@ -967,6 +1082,54 @@ mod tests {
         assert!(b[0].fast_burn);
         assert!(!b[1].fast_burn);
         assert!(cards[0].headline.as_ref().unwrap().fast_burn);
+    }
+
+    #[test]
+    fn forecast_only_from_a_live_reading() {
+        // 60 % after 1 h of 5 h: the limit is about 40 min away, well before the reset.
+        let read = |observed_at_ms| {
+            let mut r = reading(
+                Service::Claude,
+                E,
+                "claude-current",
+                SourceKind::Direct,
+                &[60.0, 10.0],
+            );
+            for b in &mut r.buckets {
+                b.resets_at_ms = Some(NOW + 4 * 3_600_000);
+            }
+            r.observed_at_ms = observed_at_ms;
+            r
+        };
+        let cards = run(
+            &[ok("claude-current", SourceKind::Direct, vec![read(NOW)])],
+            &mut LastReadings::default(),
+        );
+        assert_eq!(cards[0].forecast_mins, Some(40));
+        // A fuller weekly limit that only fills after its reset does not hide the 5 h limit that runs out first.
+        let mut r = read(NOW);
+        r.buckets[1] = Bucket {
+            name: "weekly".into(),
+            used_percent: 85.0,
+            window_secs: Some(604_800),
+            resets_at_ms: Some(NOW + 8 * 3_600_000),
+        };
+        let cards = run(
+            &[ok("claude-current", SourceKind::Direct, vec![r])],
+            &mut LastReadings::default(),
+        );
+        assert_eq!(cards[0].forecast_mins, Some(40));
+        // Older than two refresh intervals: aged, so no forecast.
+        let cards = run(
+            &[ok(
+                "claude-current",
+                SourceKind::Direct,
+                vec![read(NOW - 600_000)],
+            )],
+            &mut LastReadings::default(),
+        );
+        assert_eq!(cards[0].buckets[0].freshness, Freshness::Aged);
+        assert_eq!(cards[0].forecast_mins, None);
     }
 
     #[test]
@@ -1250,5 +1413,146 @@ mod tests {
                 id_of(Service::Antigravity, "z@example.com"),
             ]
         );
+    }
+
+    /// The readings as `readings.json` gives them back after a restart.
+    fn reload(last: &LastReadings) -> LastReadings {
+        let json = serde_json::to_string(&last.to_saved()).unwrap();
+        LastReadings::from_saved(serde_json::from_str(&json).unwrap())
+    }
+
+    #[test]
+    fn saved_reading_survives_restart_and_expired_login() {
+        let mut last = LastReadings::default();
+        let mut r = reading(
+            Service::Claude,
+            Some("a@example.com"),
+            "claude-current",
+            SourceKind::Direct,
+            &[42.0],
+        );
+        r.observed_at_ms = NOW - 7_200_000;
+        run(
+            &[ok("claude-current", SourceKind::Direct, vec![r])],
+            &mut last,
+        );
+
+        let mut restarted = reload(&last);
+        let cards = run(
+            &[err(
+                "claude-current",
+                SourceKind::Direct,
+                Service::Claude,
+                FetchError::Expired,
+            )],
+            &mut restarted,
+        );
+        assert_eq!(cards.len(), 1);
+        let c = &cards[0];
+        assert_eq!(
+            c.id,
+            id_of(Service::Claude, "a@example.com"),
+            "labels, pins and hidden carry over"
+        );
+        assert_eq!(c.state, CardState::LoginExpired);
+        assert_eq!(c.buckets.len(), 1);
+        assert_eq!(c.buckets[0].used_percent, 42.0);
+        assert_eq!(c.age_secs, Some(7_200));
+        assert!(c.current_login);
+    }
+
+    #[test]
+    fn waiting_text_names_the_service() {
+        let mut last = LastReadings::default();
+        let cards = run(
+            &[
+                err(
+                    "claude-current",
+                    SourceKind::Direct,
+                    Service::Claude,
+                    FetchError::Expired,
+                ),
+                err(
+                    "codex-current",
+                    SourceKind::Direct,
+                    Service::Codex,
+                    FetchError::Expired,
+                ),
+            ],
+            &mut last,
+        );
+        let reason = |s: Service| {
+            cards
+                .iter()
+                .find(|c| c.service == s)
+                .and_then(|c| c.reason.clone())
+        };
+        assert_eq!(
+            reason(Service::Claude).as_deref(),
+            Some("Updates when you next use Claude.")
+        );
+        assert_eq!(
+            reason(Service::Codex).as_deref(),
+            Some("Updates when you next use Codex.")
+        );
+
+        // Antigravity closed: the last reading stays, with its own line.
+        run(
+            &[ok(
+                "antigravity-app",
+                SourceKind::AntigravityApp,
+                vec![reading(
+                    Service::Antigravity,
+                    E,
+                    "antigravity-app",
+                    SourceKind::AntigravityApp,
+                    &[20.0],
+                )],
+            )],
+            &mut last,
+        );
+        let cards = run(
+            &[err(
+                "antigravity-app",
+                SourceKind::AntigravityApp,
+                Service::Antigravity,
+                FetchError::NotDetected,
+            )],
+            &mut last,
+        );
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].state, CardState::NoSource);
+        assert_eq!(cards[0].buckets[0].used_percent, 20.0);
+        assert_eq!(
+            cards[0].reason.as_deref(),
+            Some("Updates when you next open Antigravity.")
+        );
+    }
+
+    #[test]
+    fn saved_reading_has_no_email() {
+        let mut last = LastReadings::default();
+        run(
+            &[claude("claude-current", "a@example.com", 42.0)],
+            &mut last,
+        );
+        let saved = last.to_saved();
+        assert_eq!(saved.len(), 1);
+        let json = serde_json::to_string(&saved).unwrap();
+        assert!(json.contains("\"store_key\""));
+        assert!(!json.contains("email"));
+        assert!(!json.contains('@'));
+    }
+
+    #[test]
+    fn saved_entry_with_a_foreign_key_is_dropped() {
+        let mut last = LastReadings::default();
+        run(
+            &[claude("claude-current", "a@example.com", 42.0)],
+            &mut last,
+        );
+        let mut saved = last.to_saved();
+        saved[0].service = Service::Codex;
+        assert!(LastReadings::from_saved(saved).to_saved().is_empty());
     }
 }

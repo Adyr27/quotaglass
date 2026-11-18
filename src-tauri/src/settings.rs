@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
 
-pub const SETTINGS_VERSION: u32 = 3;
+pub const SETTINGS_VERSION: u32 = 4;
 /// The pill's smallest and largest scale.
 pub const PILL_SCALE: (f64, f64) = (0.65, 1.6);
 const MAX_LABEL_CHARS: usize = 40;
@@ -117,6 +117,8 @@ pub struct Settings {
     /// The window lock ("Pin pill"): no drag, no resize, and the rect is the home restored at launch.
     pub pill_locked: bool,
     pub reset_toasts: ResetToasts,
+    /// Ask GitHub once a day for a newer release. With this off, QuotaGlass makes no update request.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -136,6 +138,7 @@ impl Default for Settings {
             pill_scale: 1.0,
             pill_locked: false,
             reset_toasts: ResetToasts::default(),
+            check_updates: true,
         }
     }
 }
@@ -154,6 +157,7 @@ pub struct SettingsPatch {
     pub hidden_accounts: Option<Vec<String>>,
     pub labels: Option<BTreeMap<String, String>>,
     pub reset_toasts: Option<ResetToasts>,
+    pub check_updates: Option<bool>,
 }
 
 impl Settings {
@@ -181,6 +185,9 @@ impl Settings {
         }
         if let Some(v) = patch.labels {
             self.labels = v;
+        }
+        if let Some(v) = patch.check_updates {
+            self.check_updates = v;
         }
         if let Some(v) = patch.reset_toasts {
             self.reset_toasts = v;
@@ -322,7 +329,7 @@ impl SettingsStore {
         }
         let mut settings = match value.get("version").map(serde_json::Value::as_u64) {
             None | Some(Some(1)) => migrate_v1(&value),
-            Some(Some(2 | 3)) => {
+            Some(Some(2..=4)) => {
                 match serde_json::from_value::<Settings>(drop_unknown_sources(value)) {
                     Ok(s) => s,
                     Err(_) => return self.quarantine(),
@@ -411,7 +418,7 @@ mod tests {
         write_file(&dir, &serde_json::to_vec(&v1).unwrap());
 
         let s = store.load();
-        assert_eq!(s.version, 3);
+        assert_eq!(s.version, 4);
         assert_eq!(
             s.pill_position,
             Some(WindowRect {
@@ -438,7 +445,7 @@ mod tests {
         let (store, dir) = temp_store("v1-noversion");
         write_file(&dir, br#"{"refreshMinutes":3,"sources":{"direct":false}}"#);
         let s = store.load();
-        assert_eq!(s.version, 3);
+        assert_eq!(s.version, 4);
         assert_eq!(s.refresh_minutes, 3);
         assert_eq!(s.pill_position, None);
         assert!(!s.autostart, "autostart defaults to off");
@@ -530,6 +537,36 @@ mod tests {
     }
 
     #[test]
+    fn v3_file_migrates_with_updates_on() {
+        let (store, dir) = temp_store("v3-to-v4");
+        write_file(
+            &dir,
+            br#"{"version":3,"refreshMinutes":4,"theme":"dark","autostart":true,"labels":{"a":"Work"},"resetToasts":{"enabled":true}}"#,
+        );
+        let s = store.load();
+        assert_eq!(s.version, 4);
+        assert!(s.check_updates, "default on");
+        assert_eq!(
+            (s.refresh_minutes, s.theme, s.autostart),
+            (4, Theme::Dark, true)
+        );
+        assert_eq!(s.labels["a"], "Work");
+        assert!(s.reset_toasts.enabled);
+        assert!(!dir.join("settings.json.bad").exists());
+    }
+
+    #[test]
+    fn check_updates_can_be_switched_off() {
+        let mut s = Settings::default();
+        assert!(s.check_updates);
+        s.apply(SettingsPatch {
+            check_updates: Some(false),
+            ..SettingsPatch::default()
+        });
+        assert!(!s.check_updates);
+    }
+
+    #[test]
     fn round_trip_v3() {
         let (store, dir) = temp_store("roundtrip");
         assert_eq!(store.load(), Settings::default());
@@ -598,7 +635,7 @@ mod tests {
         });
         write_file(&dir, &serde_json::to_vec(&v2).unwrap());
         let s = store.load();
-        assert_eq!(s.version, 3);
+        assert_eq!(s.version, 4);
         assert_eq!(s.pill_position.map(|r| (r.x, r.y)), Some((100, 200)));
         assert!(!s.always_on_top && s.autostart);
         assert_eq!(s.refresh_minutes, 4);

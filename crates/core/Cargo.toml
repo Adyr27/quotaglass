@@ -17,3 +17,8 @@ zeroize = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "test-util"] }
+
+[[example]]
+name = "usage_fields"
+# Run its unit test with `cargo test --workspace`. Examples are never part of the app build.
+test = true

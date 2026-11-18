@@ -4,7 +4,6 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::time::Duration;
 
 /// The only hosts QuotaGlass ever contacts. There is no API that takes a free-form URL.
-/// `claude.ai` joins this list only if the gated session-key source ships.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Host {
     Anthropic,

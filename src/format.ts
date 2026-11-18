@@ -50,6 +50,12 @@ export function updatedText(ageSecs: number | null): string {
   return `${Math.floor(ageSecs / 86_400)} d ago`;
 }
 
+/** "At this pace, limit in about 40 min." or "... about 2 h.". Null without a forecast. */
+export function forecastText(mins: number | null): string | null {
+  if (mins === null || !Number.isFinite(mins) || mins <= 0) return null;
+  return `At this pace, limit in about ${mins < 60 ? `${mins} min` : `${Math.round(mins / 60)} h`}.`;
+}
+
 /** Whole percent used, 0 to 100. Floored, so a limit never reads as reached before it is. */
 export function usedWhole(usedPercent: number): number {
   if (!Number.isFinite(usedPercent)) return 0;
@@ -66,7 +72,7 @@ export function sentenceCase(value: string): string {
 export function stateText(a: AccountView): string | null {
   switch (a.state) {
     case "loginExpired":
-      return "Login expired.";
+      return a.reason ?? "Login expired.";
     case "profileMissing":
       return "Profile folder missing.";
     case "noReadingYet":

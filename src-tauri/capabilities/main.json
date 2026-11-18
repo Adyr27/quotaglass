@@ -30,6 +30,8 @@
     "allow-flyout-pointer",
     "allow-flyout-open-popover",
     "allow-flyout-close",
-    "allow-flyout-size"
+    "allow-flyout-size",
+    "allow-check-update",
+    "allow-install-update"
   ]
 }

@@ -10,10 +10,13 @@ import {
   flyoutPointer,
   flyoutSize,
   getSettings,
+  checkUpdate,
   getSnapshot,
+  installUpdate,
   onFlyoutMode,
   onPillLocked,
   onSnapshot,
+  onUpdate,
   openCli,
   openUrl,
   refreshNow,
@@ -44,6 +47,8 @@ export function startFlyout(): void {
   let detected: Detected | null = null;
   let locked = false;
   let refreshing = false;
+  let update: string | null = null;
+  let updating = false;
 
   /** Takes the settings a command returns; a failed command re-renders the stored values. */
   async function takeSettings(result: Promise<Result<Settings>>): Promise<void> {
@@ -73,6 +78,15 @@ export function startFlyout(): void {
     render();
   }
 
+  async function install(): Promise<void> {
+    if (updating) return;
+    updating = true;
+    render();
+    await installUpdate(); // on success the app restarts; on failure the problem line shows and the button comes back
+    updating = false;
+    render();
+  }
+
   const overlay = createOverlay();
   const popover = createPopover({
     onRefresh: () => void refresh(),
@@ -80,6 +94,7 @@ export function startFlyout(): void {
     onHide: (a) => void takeSettings(setHidden(a.id, true)),
     onSignIn: (a) => void (a.profileId === null ? connect(a.service) : openCli(a.id)),
     onRedeem: () => void openUrl("openAiUsage"),
+    onClaudeUsage: () => void openUrl("claudeUsage"),
     onAdd: (service) => void takeSettings(addAccount(service)),
     onPatch: (patch) => void takeSettings(updateSettings(patch)),
     onSource: (c, on) => void takeSettings(connectSource(c, on)),
@@ -87,6 +102,7 @@ export function startFlyout(): void {
     onLabel: (id, label) => void takeSettings(setLabel(id, label)),
     onConnectFirst: (c) => void takeSettings(connectSource(c, true)),
     onTogglePin: () => void setPillLocked(!locked),
+    onInstall: () => void install(),
   });
   const problem = h("p", { class: "problem", role: "status", hidden: true });
   setProblemListener((message) => {
@@ -111,7 +127,7 @@ export function startFlyout(): void {
     show(overlay.el, hovering);
     show(popoverBox, mode.mode === "popover");
     if (mode.mode === "popover" && snapshot !== null) {
-      popover.update({ accounts: snapshot.accounts, settings, detected, locked, refreshing, nowMs: Date.now() });
+      popover.update({ accounts: snapshot.accounts, settings, detected, locked, refreshing, update, updating, nowMs: Date.now() });
     }
     if (hovering && snapshot !== null && mode.service !== null) {
       overlay.update(mode.service, snapshot.accounts, Date.now());
@@ -148,6 +164,10 @@ export function startFlyout(): void {
   // Listeners go first so an event that fires during the first load is not missed.
   void Promise.all([
     onSnapshot(take),
+    onUpdate((next) => {
+      update = next;
+      render();
+    }),
     onPillLocked((next) => {
       locked = next;
       render();
@@ -167,6 +187,8 @@ export function startFlyout(): void {
       settings = loaded.value;
       locked = loaded.value.pillLocked;
     }
+    const found = await checkUpdate();
+    if (found.ok) update = found.value;
     if (first.ok) take(first.value);
     else render();
   });

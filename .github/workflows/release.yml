@@ -29,8 +29,20 @@ jobs:
           $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
           "RUSTFLAGS=--remap-path-prefix=$env:GITHUB_WORKSPACE=. --remap-path-prefix=$cargoHome=cargo -C link-arg=/PDBALTPATH:%_PDB%" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
       - run: npm ci
+      # A tag that does not match the app version would publish a latest.json for the wrong installer.
+      # The placeholder key would ship an updater that can never verify.
+      - name: Check version and updater key
+        shell: pwsh
+        run: |
+          $conf = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          if ($conf.version -ne $env:GITHUB_REF_NAME.TrimStart('v')) { throw "Tag $env:GITHUB_REF_NAME does not match app version $($conf.version)." }
+          if ($conf.plugins.updater.pubkey -like 'REPLACE_*') { throw "The updater public key is still the placeholder." }
       # npm takes the first `--`; tauri passes everything after the second `--` to cargo, so `--locked` reaches cargo.
+      # The signing key is in this step only. It signs the installer; the app checks that signature before it installs an update.
       - run: npm run tauri build -- -- --locked
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - name: Checksums
         shell: pwsh
         run: |
@@ -39,11 +51,25 @@ jobs:
           $hash = (Get-FileHash $exe.Name -Algorithm SHA256).Hash.ToLower()
           # LF line ending, so older sha256sum versions can check the file.
           [IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", "$hash  $($exe.Name)`n")
+          # The manifest the app reads: latest.json holds the version, the installer URL and the signature text.
+          $sig = Get-Content "$($exe.FullName).sig" -Raw
+          Copy-Item "$($exe.FullName).sig" .
+          $manifest = [ordered]@{
+            version  = $env:GITHUB_REF_NAME.TrimStart('v')
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{ "windows-x86_64" = [ordered]@{
+              signature = $sig.Trim()
+              url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/$([uri]::EscapeDataString($exe.Name))"
+            } }
+          }
+          [IO.File]::WriteAllText("$PWD/latest.json", ($manifest | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer
           path: |
             *-setup.exe
+            *-setup.exe.sig
+            latest.json
             SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 1
@@ -75,4 +101,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" *-setup.exe SHA256SUMS.txt --title "QuotaGlass $TAG" --notes "Unsigned Windows installer. Check SHA256SUMS.txt before you run it."
+        run: gh release create "$TAG" *-setup.exe *-setup.exe.sig latest.json SHA256SUMS.txt --title "QuotaGlass $TAG" --notes "Windows installer, not code-signed by Microsoft. Check SHA256SUMS.txt before you run it. The in-app updater checks its own signature."

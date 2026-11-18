@@ -66,7 +66,7 @@ impl AccountKey {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bucket {
     pub name: String,
     /// 0.0..=100.0, already validated by `checked_percent`.

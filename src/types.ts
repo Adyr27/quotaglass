@@ -34,6 +34,8 @@ export interface AccountView {
   reason: string | null;
   /** 100 minus the highest used % over the limits that still hold. */
   roomLeft: number | null;
+  /** Minutes until the first limit runs out at this pace, already rounded. Null when there is no forecast. */
+  forecastMins: number | null;
   bestNow: boolean;
   /** Codex only. Null when the source does not say. */
   bankedResets: number | null;
@@ -99,7 +101,7 @@ export interface ResetToasts {
 }
 
 export interface Settings {
-  version: 3;
+  version: 4;
   pillPosition: WindowRect | null;
   /** Pill size factor, 0.65 to 1.6. Changed only with `setPillScale`. */
   pillScale: number;
@@ -116,6 +118,8 @@ export interface Settings {
   /** Account ID to label, at most 40 characters each. */
   labels: Record<string, string>;
   resetToasts: ResetToasts;
+  /** Once a day, ask GitHub for a newer release. Off: no update request leaves. */
+  checkUpdates: boolean;
 }
 
 export type SettingsPatch = Partial<
@@ -130,6 +134,7 @@ export type SettingsPatch = Partial<
     | "resetToasts"
     | "hiddenAccounts"
     | "labels"
+    | "checkUpdates"
   >
 >;
 
@@ -141,7 +146,7 @@ export interface Detected {
 }
 
 /** A page the app may open in the browser. The UI names it; the app holds the URL. */
-export type UrlTarget = "openAiUsage";
+export type UrlTarget = "openAiUsage" | "claudeUsage";
 
 export interface BackdropPayload {
   acrylic: boolean;

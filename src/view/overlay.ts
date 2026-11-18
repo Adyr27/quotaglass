@@ -2,7 +2,7 @@
 // strips with percent, window length and reset text. No buttons, so it never needs focus.
 
 import type { AccountView, BucketView, Service } from "../types";
-import { resetText, sentenceCase, stateText, updatedText, usedWhole, visibleAccounts } from "../format";
+import { forecastText, resetText, sentenceCase, stateText, updatedText, usedWhole, visibleAccounts } from "../format";
 import { h, syncChildren } from "./dom";
 import { createStrip } from "./strip";
 
@@ -41,6 +41,7 @@ function bucketRow(b: BucketView, service: Service, nowMs: number): HTMLElement 
 function accountBlock(a: AccountView, nowMs: number): HTMLElement {
   const age = a.freshness === "live" ? "" : updatedText(a.ageSecs);
   const reason = stateText(a);
+  const forecast = forecastText(a.forecastMins);
   const dim = a.state === "loginExpired" || a.state === "profileMissing" || a.freshness === "stale";
   return h("section", { class: "ov-account", "data-dim": String(dim) }, [
     h("header", { class: "ov-head" }, [
@@ -51,6 +52,7 @@ function accountBlock(a: AccountView, nowMs: number): HTMLElement {
       age === "" ? null : h("span", { class: "ov-age num" }, [age]),
     ]),
     reason === null ? null : h("p", { class: "ov-reason" }, [reason]),
+    forecast === null ? null : h("p", { class: "forecast", "data-warn": String((a.forecastMins ?? 0) < 30) }, [forecast]),
     ...a.buckets.map((b) => bucketRow(b, a.service, nowMs)),
   ]);
 }

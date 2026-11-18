@@ -1,13 +1,14 @@
 //! Runs one task per connected source and added account, and merges the results into one snapshot.
 
+use crate::notify::JsonStore;
 use crate::settings::{Connection, Settings};
-use quotaglass_core::merge::{self, LastReadings, MergeCtx, TaskMeta, TaskRole};
+use quotaglass_core::merge::{self, LastReadings, MergeCtx, SavedReading, TaskMeta, TaskRole};
 use quotaglass_core::sources::antigravity_app::AntigravityApp;
 use quotaglass_core::sources::claude_direct::ClaudeDirect;
 use quotaglass_core::sources::codex_direct::CodexDirect;
 use quotaglass_core::view::Snapshot;
 use quotaglass_core::{
-    rate_limit_wait_secs, Env, FetchError, Provider, Reading, Service, SourceOutcome,
+    rate_limit_wait_secs, Env, FetchError, Provider, Reading, Service, SourceKind, SourceOutcome,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -162,10 +163,14 @@ pub fn detect(env: &Env) -> Detected {
     }
 }
 
-/// `NotDetected` from a fetch means the same as `detect() == false`: the source is gone (`None`).
-fn settle(result: Result<Vec<Reading>, FetchError>) -> Option<Result<Vec<Reading>, FetchError>> {
+/// `NotDetected` from a fetch means the same as `detect() == false`: the source is gone (`None`). A closed
+/// Antigravity app is the exception: it comes back, so its last reading stays on screen.
+fn settle(
+    kind: SourceKind,
+    result: Result<Vec<Reading>, FetchError>,
+) -> Option<Result<Vec<Reading>, FetchError>> {
     match result {
-        Err(FetchError::NotDetected) => None,
+        Err(FetchError::NotDetected) if kind != SourceKind::AntigravityApp => None,
         other => Some(other),
     }
 }
@@ -205,7 +210,7 @@ fn ticker(start: Instant, period_secs: u64) -> Interval {
 
 /// What one run of a task gives the loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StepResult {
+pub(crate) enum StepResult {
     Ok,
     Failed,
     /// HTTP 429, with the server's `Retry-After` seconds when it sent an integer.
@@ -214,7 +219,7 @@ enum StepResult {
 
 /// Calls `step` now, then every `base_secs` (longer while it keeps failing, or after a 429), and whenever `wake`
 /// fires. A wake runs the step at once: that is the manual Retry that bypasses any wait.
-async fn run_loop<F, Fut>(base_secs: u64, wake: Arc<Notify>, mut step: F)
+pub(crate) async fn run_loop<F, Fut>(base_secs: u64, wake: Arc<Notify>, mut step: F)
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = StepResult>,
@@ -253,6 +258,9 @@ struct State {
     tasks: Option<Vec<TaskMeta>>,
     labels: BTreeMap<String, String>,
     hidden: Vec<String>,
+    /// `readings.json`, once `keep_readings` ran. `saved` is what it holds, so an unchanged list is not written again.
+    store: Option<JsonStore>,
+    saved: Vec<SavedReading>,
 }
 
 impl State {
@@ -269,7 +277,16 @@ impl State {
             tasks: None,
             labels: BTreeMap::new(),
             hidden: Vec::new(),
+            store: None,
+            saved: Vec::new(),
         }
+    }
+
+    /// Loads the saved readings and saves every change from now on. A missing or broken file loads as empty.
+    fn keep_readings(&mut self, store: JsonStore) {
+        self.last = LastReadings::from_saved(store.load());
+        self.saved = self.last.to_saved();
+        self.store = Some(store);
     }
 
     fn has_task(&self, id: &str) -> bool {
@@ -299,13 +316,11 @@ impl State {
                     base_secs: e.base_secs(settings.refresh_minutes),
                 })
                 .collect();
-            // A removed task leaves nothing behind. Kept tasks keep their readings until they answer again.
-            for old in self.tasks.take().unwrap_or_default() {
-                if !next.iter().any(|t| t.id == old.id) {
-                    self.outcomes.remove(&old.id);
-                    self.last.forget(&old.id);
-                }
-            }
+            // A removed task leaves nothing behind, also a saved reading of a task removed while the app was closed.
+            // Kept tasks keep their readings until they answer again.
+            let kept = |id: &str| next.iter().any(|t| t.id == id);
+            self.outcomes.retain(|id, _| kept(id));
+            self.last.retain_tasks(kept);
             self.tasks = Some(next);
         }
         restart.then_some(plan)
@@ -345,6 +360,22 @@ impl State {
             accounts,
             generated_at_ms: now_ms,
         };
+        self.save_readings();
+    }
+
+    /// Writes `readings.json` when the stored readings changed. The 30 s republish changes nothing, so it writes nothing.
+    fn save_readings(&mut self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let now = self.last.to_saved();
+        if now == self.saved {
+            return;
+        }
+        match store.save(&now) {
+            Ok(()) => self.saved = now,
+            Err(e) => tracing::warn!(error = %e, "could not save the last readings"),
+        }
     }
 }
 
@@ -397,17 +428,21 @@ impl Shared {
         } else if !provider.detect(&self.env) {
             None
         } else {
-            settle(provider.fetch(&self.env).await)
+            settle(provider.kind(), provider.fetch(&self.env).await)
         };
         let step = match &result {
             Some(Err(FetchError::RateLimited { retry_after_secs })) => {
                 StepResult::RateLimited(*retry_after_secs)
             }
+            // A closed app is no failure: no backoff and no warning, the same as a gone source.
+            Some(Err(FetchError::NotDetected)) => StepResult::Ok,
             Some(Err(_)) => StepResult::Failed,
             _ => StepResult::Ok,
         };
         if let Some(Err(e)) = &result {
-            tracing::warn!(source = ?provider.kind(), service = ?provider.service(), error = ?e, "source fetch failed");
+            if *e != FetchError::NotDetected {
+                tracing::warn!(source = ?provider.kind(), service = ?provider.service(), error = ?e, "source fetch failed");
+            }
         }
         let outcome = result.map(|result| SourceOutcome {
             task_id: task.id.clone(),
@@ -438,6 +473,11 @@ impl Scheduler {
             }),
             tasks: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Starts from the readings saved by the last run and saves each change. Call before the first `apply`.
+    pub fn keep_readings(&self, store: JsonStore) {
+        lock(&self.shared.state).keep_readings(store);
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -892,12 +932,17 @@ mod tests {
 
     #[test]
     fn not_detected_forgets_readings() {
-        assert!(settle(Err(FetchError::NotDetected)).is_none());
+        assert!(settle(SourceKind::Direct, Err(FetchError::NotDetected)).is_none());
         assert_eq!(
-            settle(Err(FetchError::Timeout)),
+            settle(SourceKind::Direct, Err(FetchError::Timeout)),
             Some(Err(FetchError::Timeout))
         );
-        assert_eq!(settle(Ok(vec![])), Some(Ok(vec![])));
+        assert_eq!(settle(SourceKind::Direct, Ok(vec![])), Some(Ok(vec![])));
+        assert_eq!(
+            settle(SourceKind::AntigravityApp, Err(FetchError::NotDetected)),
+            Some(Err(FetchError::NotDetected)),
+            "a closed Antigravity keeps its reading"
+        );
 
         let mut st = State::new(NOW);
         st.take_settings(&Settings {
@@ -1008,6 +1053,58 @@ mod tests {
             serde_json::to_value(detect(&env)).unwrap(),
             serde_json::json!({"claude": true, "codex": true, "antigravityApp": true})
         );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn broken_readings_file_loads_empty() {
+        let home = temp_home("readings-broken");
+        let path = home.join("readings.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+        let mut st = State::new(NOW);
+        st.keep_readings(crate::notify::JsonStore::new(path));
+        st.take_settings(&Settings {
+            connected: vec![Connection::ClaudeCurrent],
+            ..Settings::default()
+        });
+        st.rebuild(NOW);
+        assert!(st.snapshot.accounts.is_empty());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn readings_are_saved_reloaded_and_removed() {
+        let home = temp_home("readings-saved");
+        let path = home.join("readings.json");
+        let mut s = Settings {
+            connected: vec![Connection::ClaudeCurrent],
+            ..Settings::default()
+        };
+        let task = "claude-current";
+
+        let mut first = State::new(NOW);
+        first.keep_readings(crate::notify::JsonStore::new(path.clone()));
+        first.take_settings(&s);
+        first.record(task, Some(outcome(task, Ok(vec![reading(task)]))));
+        first.rebuild(NOW);
+        assert!(path.exists(), "a new reading is saved");
+
+        let mut restarted = State::new(NOW);
+        restarted.keep_readings(crate::notify::JsonStore::new(path.clone()));
+        restarted.take_settings(&s);
+        restarted.rebuild(NOW);
+        assert_eq!(
+            restarted.snapshot.accounts.len(),
+            1,
+            "the saved reading shows before any fetch"
+        );
+
+        s.connected = vec![];
+        restarted.take_settings(&s);
+        restarted.rebuild(NOW);
+        assert!(restarted.snapshot.accounts.is_empty());
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains(task), "a removed task leaves the file");
         let _ = std::fs::remove_dir_all(&home);
     }
 }

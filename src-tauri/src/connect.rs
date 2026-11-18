@@ -292,6 +292,7 @@ pub fn logout(service: Service, tool: Option<&Path>, profile: &Path) -> Result<(
 #[serde(rename_all = "camelCase")]
 pub enum UrlTarget {
     OpenAiUsage,
+    ClaudeUsage,
 }
 
 impl UrlTarget {
@@ -299,6 +300,8 @@ impl UrlTarget {
         match self {
             // verify before release: the page the Codex app links to for usage and banked resets.
             UrlTarget::OpenAiUsage => "https://chatgpt.com/codex/settings/usage",
+            // The Claude page that shows limits and resets. A browser page only: QuotaGlass sends nothing there.
+            UrlTarget::ClaudeUsage => "https://claude.ai/settings/usage",
         }
     }
 }
@@ -551,20 +554,28 @@ mod tests {
 
     #[test]
     fn url_targets_are_https_allowlisted() {
-        // One target today; a new one must be added here too.
-        let url = UrlTarget::OpenAiUsage.url();
-        assert!(url.starts_with("https://"), "{url}");
-        assert!(
-            !url.chars()
-                .any(|c| c.is_whitespace() || "&|<>^%\"()!`'".contains(c)),
-            "{url} would be read by cmd.exe"
-        );
+        // Every target must be listed here.
+        for target in [UrlTarget::OpenAiUsage, UrlTarget::ClaudeUsage] {
+            let url = target.url();
+            assert!(url.starts_with("https://"), "{url}");
+            assert!(
+                !url.chars()
+                    .any(|c| c.is_whitespace() || "&|<>^%\"()!`'".contains(c)),
+                "{url} would be read by cmd.exe"
+            );
+        }
         assert_eq!(
             UrlTarget::OpenAiUsage.url(),
             "https://chatgpt.com/codex/settings/usage"
         );
+        assert_eq!(
+            UrlTarget::ClaudeUsage.url(),
+            "https://claude.ai/settings/usage"
+        );
         let t: UrlTarget = serde_json::from_str(r#""openAiUsage""#).unwrap();
         assert_eq!(t, UrlTarget::OpenAiUsage);
+        let t: UrlTarget = serde_json::from_str(r#""claudeUsage""#).unwrap();
+        assert_eq!(t, UrlTarget::ClaudeUsage);
         assert!(serde_json::from_str::<UrlTarget>(r#""https://evil.example""#).is_err());
     }
 

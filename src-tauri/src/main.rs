@@ -10,6 +10,7 @@ mod scheduler;
 mod settings;
 mod topmost;
 mod tray;
+mod update;
 mod window;
 
 use commands::AppState;
@@ -38,6 +39,7 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(window::WindowState::default())
         .manage(flyout::FlyoutState::default())
         .setup(|app| {
@@ -62,6 +64,8 @@ fn main() {
                 settings.reset_toasts.clone(),
             ));
 
+            app.manage(update::Pending::default());
+
             let handle = app.handle().clone();
             let env = Env::from_system().map_err(|e| format!("Cannot start: {e:?}"))?;
             let scheduler = Scheduler::new(env, move |snapshot| {
@@ -69,6 +73,9 @@ fn main() {
                 notify::on_snapshot(&handle, &handle.state::<Warnings>(), snapshot);
                 reset_notify::on_snapshot(&handle, snapshot);
             });
+            scheduler.keep_readings(JsonStore::new(
+                JsonStore::in_appdata("readings.json").ok_or("APPDATA is not set")?,
+            ));
 
             app.manage(AppState {
                 settings: Mutex::new(settings.clone()),
@@ -85,6 +92,7 @@ fn main() {
             flyout::setup(app.handle());
             tray::build(app.handle())?;
             reset_notify::start(app.handle());
+            update::start(app.handle());
             topmost::start(app.handle());
             app.state::<AppState>().scheduler.apply(&settings);
             Ok(())
@@ -112,6 +120,8 @@ fn main() {
             commands::flyout_open_popover,
             commands::flyout_close,
             commands::flyout_size,
+            commands::check_update,
+            commands::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running QuotaGlass");

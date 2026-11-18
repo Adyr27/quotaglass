@@ -25,6 +25,18 @@ pub fn emit_backdrop(app: &AppHandle, acrylic: bool) {
     let _ = app.emit("backdrop", serde_json::json!({ "acrylic": acrylic }));
 }
 
+/// The version the last daily check found, or `None`. Makes no request: `update::start` does the checking.
+#[tauri::command]
+pub fn check_update(app: AppHandle) -> Option<String> {
+    crate::update::pending_version(&app)
+}
+
+/// Installs the update the last check found, then restarts. The window cannot name another URL.
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> Result<(), String> {
+    crate::update::install(&app).await
+}
+
 /// Applies a patch: window and autostart side effects first, then the file, then the scheduler.
 /// Used by the `update_settings` command.
 pub fn update(app: &AppHandle, patch: SettingsPatch) -> Result<Settings, String> {
@@ -74,6 +86,13 @@ pub fn update(app: &AppHandle, patch: SettingsPatch) -> Result<Settings, String>
     // After the settings lock is released: the look is applied on the main thread.
     if (next.theme, next.material) != (before.theme, before.material) {
         window::apply_look(app, next.theme, next.material);
+    }
+    // Switch on: look now, not at the next daily tick. Switch off: the footer button goes away.
+    if next.check_updates && !before.check_updates {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { crate::update::check(&app).await });
+    } else if !next.check_updates && before.check_updates {
+        let _ = app.emit("update", None::<String>);
     }
     Ok(next)
 }
@@ -667,7 +686,7 @@ mod tests {
             .map(|p| p.replace('-', "_"))
             .collect();
 
-        assert_eq!(handlers.len(), 22, "{handlers:?}");
+        assert_eq!(handlers.len(), 24, "{handlers:?}");
         assert!(handlers.contains("detect"));
         assert_eq!(manifest, handlers, "build.rs AppManifest::commands");
         assert_eq!(allowed, handlers, "capabilities/main.json allow-* entries");

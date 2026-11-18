@@ -120,6 +120,19 @@ export function connectSource(conn: Connection, on: boolean): Promise<Result<Set
   return call<Settings>("connect_source", "Could not change that source.", { conn, on });
 }
 
+/** The version the last daily check found, or null. Makes no request. */
+export function checkUpdate(): Promise<Result<string | null>> {
+  return call<string | null>("check_update", "Could not check for updates.");
+}
+
+export function installUpdate(): Promise<Result<void>> {
+  return call<void>("install_update", "Could not install the update.");
+}
+
+export function onUpdate(handler: (version: string | null) => void): Promise<void> {
+  return subscribe<string | null>("update", handler);
+}
+
 export function openUrl(target: UrlTarget): Promise<Result<void>> {
   return call<void>("open_url", "Could not open the browser.", { target });
 }

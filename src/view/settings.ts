@@ -72,6 +72,7 @@ export function createSettings(deps: SettingsDeps): SettingsView {
   const theme = seg<Theme>("set-theme", [["system", "System"], ["light", "Light"], ["dark", "Dark"]], (v) => deps.onPatch({ theme: v }));
   const glass = seg<Material>("set-glass", [["acrylic", "Acrylic"], ["mica", "Mica"], ["clear", "Clear"]], (v) => deps.onPatch({ material: v }));
   const minutes = seg<number>("set-refresh", [[1, "1 min"], [2, "2 min"], [5, "5 min"]], (v) => deps.onPatch({ refreshMinutes: v }));
+  const updates = createSwitch({ labelledBy: "set-updates", onChange: (v) => deps.onPatch({ checkUpdates: v }) });
   const onTop = createSwitch({ labelledBy: "set-top", onChange: (v) => deps.onPatch({ alwaysOnTop: v }) });
   const autostart = createSwitch({ labelledBy: "set-start", onChange: (v) => deps.onPatch({ autostart: v }) });
 
@@ -107,6 +108,7 @@ export function createSettings(deps: SettingsDeps): SettingsView {
       row("set-top", "Always on top", onTop.el),
       row("set-start", "Start with Windows", autostart.el),
       row("set-refresh", "Refresh every", minutes.el),
+      row("set-updates", "Check for updates", updates.el, "Once a day, from GitHub. Nothing else is sent."),
     ]),
     h("h3", { class: "set-title" }, ["Reset reminders"]),
     h("div", { class: "set-group" }, [
@@ -132,6 +134,7 @@ export function createSettings(deps: SettingsDeps): SettingsView {
       minutes.set(settings.refreshMinutes);
       onTop.set(settings.alwaysOnTop);
       autostart.set(settings.autostart);
+      updates.set(settings.checkUpdates);
       toasts = settings.resetToasts;
       toastMaster.set(toasts.enabled);
       toastSound.set(toasts.sound);

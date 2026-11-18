@@ -23,6 +23,7 @@ export interface PopoverDeps {
   onLabel(id: string, label: string | null): void;
   onConnectFirst(c: Connection): void;
   onTogglePin(): void;
+  onInstall(): void;
 }
 
 export interface PopoverData {
@@ -31,6 +32,9 @@ export interface PopoverData {
   detected: Detected | null;
   locked: boolean;
   refreshing: boolean;
+  /** The newer version the daily check found, or null. */
+  update: string | null;
+  updating: boolean;
   nowMs: number;
 }
 
@@ -65,7 +69,7 @@ export function createPopover(deps: PopoverDeps): Popover {
     onHide: deps.onHide,
     onSignIn: deps.onSignIn,
   });
-  const first = createFirst(deps.onConnectFirst);
+  const first = createFirst(deps.onConnectFirst, (on) => deps.onPatch({ checkUpdates: on }));
   const settingsView = createSettings({
     onPatch: deps.onPatch,
     onSource: deps.onSource,
@@ -93,8 +97,10 @@ export function createPopover(deps: PopoverDeps): Popover {
   const pinText = h("span", {}, ["Pin pill"]);
   const pinButton = h("button", { class: "btn btn-quiet", type: "button", "aria-pressed": "false" }, [iconPin(), pinText]);
   const settingsButton = h("button", { class: "btn btn-quiet", type: "button" }, [iconSliders(), "Settings"]);
+  const updateButton = h("button", { class: "btn btn-primary", type: "button", hidden: true });
+  updateButton.addEventListener("click", () => deps.onInstall());
   const foot = h("div", { class: "pop-foot" }, [addButton, pinButton, settingsButton]);
-  const listPage = h("div", { class: "pop-page" }, [list, resets, choice, foot]);
+  const listPage = h("div", { class: "pop-page" }, [list, resets, choice, updateButton, foot]);
   const el = h("div", { class: "popover" }, [listPage, first.el, settingsView.el]);
 
   const toggleChoice = (open: boolean): void => {
@@ -204,6 +210,10 @@ export function createPopover(deps: PopoverDeps): Popover {
     show(first.el, page === "first");
     show(settingsView.el, page === "settings" && settings !== null);
 
+    show(updateButton, last.update !== null);
+    setText(updateButton, last.updating ? "Updating…" : `Update to v${last.update ?? ""}`);
+    updateButton.disabled = last.updating;
+
     setAttr(pinButton, "aria-pressed", String(last.locked));
     setText(pinText, last.locked ? "Unpin pill" : "Pin pill");
 
@@ -237,7 +247,7 @@ export function createPopover(deps: PopoverDeps): Popover {
     show(resets, resetWanted.length > 0);
     syncChildren(resetList, resetWanted);
 
-    first.update(last.detected);
+    first.update(last.detected, settings?.checkUpdates ?? null);
     if (settings !== null) settingsView.update(settings, last.detected, accounts);
   }
 

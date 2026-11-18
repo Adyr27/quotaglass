@@ -44,6 +44,10 @@ Reset reminders are off by default. Turn them on in Settings. A toast tells you 
 
 When Claude answers "too many requests", the account keeps its last reading and shows "Rate limited. Retrying in N min." in a neutral colour. Claude accounts are read at most every 5 minutes, whatever the refresh setting says. The wait after a rate limit is at most 15 minutes. Retry skips the wait.
 
+## Update checks
+
+Once a day, and at start, QuotaGlass asks GitHub whether a newer release exists. That is one request to `github.com/Adyr27/quotaglass`, answered from GitHub's release file servers; nothing about you or your accounts is sent with it. When a newer version exists, the popover footer shows "Update to vX.Y.Z". Nothing installs until you click it. The installer is signed with a key the app already knows, and the app refuses an update whose signature doesn't match. The check is on by default. Turn it off on the first screen or in Settings ("Check for updates"), and no update request leaves the PC. Because it is on by default, the first check can run before you reach that first screen.
+
 ## Window and settings
 
 Sizes follow Windows text size.
@@ -54,6 +58,7 @@ Settings:
 - Always on top (on by default)
 - Start with Windows
 - Refresh every 1, 2 or 5 min
+- Check for updates (on by default)
 - Reset reminders (on or off, per service, sound)
 - Sources
 - Account names
@@ -73,7 +78,7 @@ A CLI installed under a folder whose path has `&`, `|`, `<`, `>`, `^`, `%`, `!`,
 - Vendor login files are read-only.
 - Tokens are never refreshed.
 - No Windows Credential Manager or Google session use.
-- No telemetry, analytics, crash uploads or auto-updates.
+- No telemetry, analytics or crash uploads. The only other request is the daily update check, which you can switch off.
 - The app writes only to `%APPDATA%\QuotaGlass\`: `settings.json` (window, look, sources, hidden accounts, names), `warnings.json`, `resets.json`, and `profiles\<id>\` (the CLI sign-ins that you add).
 
 ## Install

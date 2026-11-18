@@ -24,6 +24,8 @@ fn main() {
         "flyout_open_popover",
         "flyout_close",
         "flyout_size",
+        "check_update",
+        "install_update",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

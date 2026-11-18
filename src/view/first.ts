@@ -3,7 +3,7 @@
 
 import type { Connection, Detected } from "../types";
 import { CONNECTION_NAME, CONNECTION_ORDER } from "../format";
-import { h, setAttr, setText } from "./dom";
+import { createSwitch, h, setAttr, setText } from "./dom";
 
 const MISSING: Record<Connection, string> = {
   claudeCurrent: "Not signed in on this PC.",
@@ -18,10 +18,10 @@ function found(d: Detected, c: Connection): boolean {
 export interface First {
   readonly el: HTMLElement;
   readonly heading: HTMLElement;
-  update(detected: Detected | null): void;
+  update(detected: Detected | null, checkUpdates: boolean | null): void;
 }
 
-export function createFirst(onConnect: (c: Connection) => void): First {
+export function createFirst(onConnect: (c: Connection) => void, onCheckUpdates: (on: boolean) => void): First {
   const heading = h("h2", { class: "view-title", id: "first-title", tabindex: -1 }, ["Connect your accounts"]);
   const rows = CONNECTION_ORDER.map((c) => {
     const button = h("button", { class: "btn btn-primary", type: "button" }, [CONNECTION_NAME[c]]);
@@ -31,16 +31,25 @@ export function createFirst(onConnect: (c: Connection) => void): First {
     });
     return { c, button, why, el: h("div", { class: "first-row" }, [button, why]) };
   });
+  const updates = createSwitch({ labelledBy: "first-updates", describedBy: "first-updates-note", onChange: onCheckUpdates });
   const el = h("section", { class: "first", "aria-labelledby": "first-title" }, [
     heading,
     h("p", { class: "view-text" }, ["Nothing is read until you pick one."]),
     ...rows.map((r) => r.el),
+    h("div", { class: "set-row" }, [
+      h("div", { class: "set-label" }, [
+        h("span", { id: "first-updates" }, ["Check for updates"]),
+        h("span", { class: "set-note", id: "first-updates-note" }, ["Once a day, from GitHub. Nothing else is sent."]),
+      ]),
+      updates.el,
+    ]),
   ]);
 
   return {
     el,
     heading,
-    update(detected) {
+    update(detected, checkUpdates) {
+      updates.set(checkUpdates ?? true);
       for (const r of rows) {
         const ok = detected === null || found(detected, r.c);
         setAttr(r.button, "aria-disabled", ok ? null : "true");

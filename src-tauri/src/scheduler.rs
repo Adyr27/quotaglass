@@ -210,7 +210,7 @@ fn ticker(start: Instant, period_secs: u64) -> Interval {
 
 /// What one run of a task gives the loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StepResult {
+pub(crate) enum StepResult {
     Ok,
     Failed,
     /// HTTP 429, with the server's `Retry-After` seconds when it sent an integer.
@@ -219,7 +219,7 @@ enum StepResult {
 
 /// Calls `step` now, then every `base_secs` (longer while it keeps failing, or after a 429), and whenever `wake`
 /// fires. A wake runs the step at once: that is the manual Retry that bypasses any wait.
-async fn run_loop<F, Fut>(base_secs: u64, wake: Arc<Notify>, mut step: F)
+pub(crate) async fn run_loop<F, Fut>(base_secs: u64, wake: Arc<Notify>, mut step: F)
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = StepResult>,

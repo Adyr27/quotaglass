@@ -101,7 +101,7 @@ export interface ResetToasts {
 }
 
 export interface Settings {
-  version: 3;
+  version: 4;
   pillPosition: WindowRect | null;
   /** Pill size factor, 0.65 to 1.6. Changed only with `setPillScale`. */
   pillScale: number;
@@ -118,6 +118,8 @@ export interface Settings {
   /** Account ID to label, at most 40 characters each. */
   labels: Record<string, string>;
   resetToasts: ResetToasts;
+  /** Once a day, ask GitHub for a newer release. Off: no update request leaves. */
+  checkUpdates: boolean;
 }
 
 export type SettingsPatch = Partial<
@@ -132,6 +134,7 @@ export type SettingsPatch = Partial<
     | "resetToasts"
     | "hiddenAccounts"
     | "labels"
+    | "checkUpdates"
   >
 >;
 

@@ -793,7 +793,11 @@ mod tests {
         let strip = rect(800, 1044, 104, 32);
         let next = resized_rect(strip, 125, 38, &SCREEN);
         assert!(next.y >= 1040, "still on the strip, got y = {}", next.y);
-        assert!(next.y + 38 <= 1080, "still on the monitor, got y = {}", next.y);
+        assert!(
+            next.y + 38 <= 1080,
+            "still on the monitor, got y = {}",
+            next.y
+        );
         assert_eq!(next.x, 800);
     }
 

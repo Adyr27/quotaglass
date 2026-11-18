@@ -20,6 +20,9 @@ pub struct Alert {
     pub level: u8,
 }
 
+/// Second line of a 90% warning when the account has a banked reset.
+const RESET_WAITING: &str = "A reset is available. Check what it restores before you use it.";
+
 /// A small JSON file in `%APPDATA%\QuotaGlass`, written atomically. Used for `warnings.json` and `resets.json`.
 pub struct JsonStore {
     path: PathBuf,
@@ -95,10 +98,16 @@ fn check_at(snapshot: &Snapshot, state: &mut WarnState, offset_secs: Option<i32>
                         .and_then(|r| warnings::reset_text(now_ms, r, offset_secs))
                         .map(|t| format!(" — resets {t}"))
                         .unwrap_or_default();
+                    // A banked reset can undo the limit, but it may also spend something: say so at 90%.
+                    let banked = if level >= 90 && account.banked_resets.is_some_and(|n| n > 0) {
+                        format!("\n{RESET_WAITING}")
+                    } else {
+                        String::new()
+                    };
                     alerts.push(Alert {
                         title: format!("{} · {}", provider_name(account.service), account.label),
                         body: format!(
-                            "{} at {}%{resets}",
+                            "{} at {}%{resets}{banked}",
                             bucket.name,
                             bucket.used_percent.floor()
                         ),
@@ -291,6 +300,44 @@ mod tests {
         let alerts = check_at(&s, &mut WarnState::default(), Some(0));
         assert_eq!(alerts[0].level, 80);
         assert_eq!(alerts[0].body, "5-hour at 89%");
+    }
+
+    fn at_90(banked: Option<u32>) -> Vec<Alert> {
+        let mut a = account(
+            "codex:x",
+            Service::Codex,
+            "Codex",
+            vec![bucket("weekly", 91.0, None)],
+        );
+        a.banked_resets = banked;
+        check_at(&snap(vec![a]), &mut WarnState::default(), Some(0))
+    }
+
+    #[test]
+    fn ninety_percent_with_a_reset_waiting_gets_a_second_line() {
+        let alerts = at_90(Some(1));
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(
+            alerts[0].body,
+            "weekly at 91%\nA reset is available. Check what it restores before you use it."
+        );
+        for banked in [None, Some(0)] {
+            assert_eq!(at_90(banked)[0].body, "weekly at 91%", "{banked:?}");
+        }
+    }
+
+    #[test]
+    fn eighty_percent_never_gets_the_reset_line() {
+        let mut a = account(
+            "codex:x",
+            Service::Codex,
+            "Codex",
+            vec![bucket("weekly", 84.0, None)],
+        );
+        a.banked_resets = Some(2);
+        let alerts = check_at(&snap(vec![a]), &mut WarnState::default(), Some(0));
+        assert_eq!(alerts[0].level, 80);
+        assert_eq!(alerts[0].body, "weekly at 84%");
     }
 
     #[test]

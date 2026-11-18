@@ -12,9 +12,43 @@ pub const GROUP_MS: i64 = 2 * 60_000;
 /// A reset missed by more than this (the app was not running) is dropped without a toast.
 pub const LATE_GRACE_MS: i64 = 15 * 60_000;
 
-/// `warnings::key(account_id, bucket)` to the next reset seen for that limit.
+/// `.0`: `warnings::key(account_id, bucket)` to the next reset seen for that limit.
+/// `.1`: account id (already hashed) to the last banked reset count seen, so a restart sends no second toast.
+///
+/// On disk it is `{"entries": .., "banked": ..}`. A file from before counts existed is the bare entries map and
+/// still loads (see [`OnDisk`]).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Default, Debug)]
-pub struct ResetState(pub BTreeMap<String, ResetEntry>);
+#[serde(from = "OnDisk", into = "OnDisk")]
+pub struct ResetState(pub BTreeMap<String, ResetEntry>, pub BTreeMap<String, u32>);
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum OnDisk {
+    Current {
+        entries: BTreeMap<String, ResetEntry>,
+        #[serde(default)]
+        banked: BTreeMap<String, u32>,
+    },
+    Old(BTreeMap<String, ResetEntry>),
+}
+
+impl From<OnDisk> for ResetState {
+    fn from(d: OnDisk) -> Self {
+        match d {
+            OnDisk::Current { entries, banked } => Self(entries, banked),
+            OnDisk::Old(entries) => Self(entries, BTreeMap::new()),
+        }
+    }
+}
+
+impl From<ResetState> for OnDisk {
+    fn from(s: ResetState) -> Self {
+        OnDisk::Current {
+            entries: s.0,
+            banked: s.1,
+        }
+    }
+}
 
 /// Holds ids, labels, bucket names and times only. Never an email or a token.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -51,6 +85,39 @@ pub struct Due {
     pub account_id: String,
     pub label: String,
     pub buckets: Vec<String>,
+}
+
+/// An account whose banked reset count went up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Gain {
+    pub service: Service,
+    pub account_id: String,
+    pub label: String,
+}
+
+/// Compares each account's `banked_resets` with the stored count and returns the rises. A first count is a
+/// baseline, not a rise (an upgrade or a new account must not toast for a reset it already had). An unknown
+/// count (`None`) changes nothing. Hidden and switched-off accounts drop their count.
+/// shortcut: an account missing from the snapshot keeps its count; prune it if accounts ever come and go often.
+pub fn track_banked(state: &mut ResetState, snapshot: &Snapshot, on: &Switches) -> Vec<Gain> {
+    let mut gains = Vec::new();
+    for a in &snapshot.accounts {
+        if a.hidden || !on.on(a.service) {
+            state.1.remove(&a.id);
+            continue;
+        }
+        let Some(n) = a.banked_resets else {
+            continue;
+        };
+        if state.1.insert(a.id.clone(), n).is_some_and(|old| n > old) {
+            gains.push(Gain {
+                service: a.service,
+                account_id: a.id.clone(),
+                label: a.label.clone(),
+            });
+        }
+    }
+    gains
 }
 
 /// Updates the entries from a snapshot. Hidden accounts and switched-off services drop their entries.
@@ -485,5 +552,103 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains('@'));
         assert!(!json.to_lowercase().contains("token"));
+    }
+
+    fn codex(banked: Option<u32>) -> AccountView {
+        let mut a = acct("codex:a", Service::Codex, vec![]);
+        a.banked_resets = banked;
+        a
+    }
+
+    fn gains(s: &mut ResetState, banked: Option<u32>) -> Vec<Gain> {
+        track_banked(s, &snap(NOW, vec![codex(banked)]), &ALL)
+    }
+
+    #[test]
+    fn banked_rise_gives_one_gain() {
+        let mut s = ResetState::default();
+        assert!(gains(&mut s, Some(0)).is_empty(), "0 stored");
+        let up = gains(&mut s, Some(1));
+        assert_eq!(
+            up,
+            vec![Gain {
+                service: Service::Codex,
+                account_id: "codex:a".into(),
+                label: "codex:a label".into(),
+            }]
+        );
+        assert!(gains(&mut s, Some(1)).is_empty(), "1 to 1");
+        assert_eq!(gains(&mut s, Some(2)).len(), 1, "1 to 2");
+        assert!(gains(&mut s, Some(1)).is_empty(), "a drop is silent");
+        assert_eq!(gains(&mut s, Some(2)).len(), 1, "and a new rise fires");
+    }
+
+    #[test]
+    fn first_count_is_a_baseline_not_a_gain() {
+        let mut s = ResetState::default();
+        assert!(gains(&mut s, Some(3)).is_empty());
+        assert_eq!(s.1["codex:a"], 3);
+    }
+
+    #[test]
+    fn unknown_count_keeps_the_stored_one() {
+        let mut s = ResetState::default();
+        gains(&mut s, Some(1));
+        assert!(gains(&mut s, None).is_empty());
+        assert!(gains(&mut s, Some(1)).is_empty(), "no toast after a gap");
+        assert_eq!(s.1["codex:a"], 1);
+    }
+
+    #[test]
+    fn hidden_or_switched_off_account_drops_its_count() {
+        let mut s = ResetState::default();
+        gains(&mut s, Some(1));
+        let mut hidden = codex(Some(1));
+        hidden.hidden = true;
+        assert!(track_banked(&mut s, &snap(NOW, vec![hidden]), &ALL).is_empty());
+        assert!(s.1.is_empty());
+
+        gains(&mut s, Some(1));
+        let off = Switches {
+            codex: false,
+            ..ALL
+        };
+        assert!(track_banked(&mut s, &snap(NOW, vec![codex(Some(2))]), &off).is_empty());
+        assert!(s.1.is_empty());
+    }
+
+    #[test]
+    fn empty_snapshot_keeps_counts() {
+        let mut s = ResetState::default();
+        gains(&mut s, Some(1));
+        assert!(track_banked(&mut s, &snap(NOW, vec![]), &ALL).is_empty());
+        assert_eq!(s.1["codex:a"], 1, "restart: first publish has no accounts");
+    }
+
+    #[test]
+    fn counts_round_trip_json() {
+        let mut s = ResetState::default();
+        track(
+            &mut s,
+            &snap(NOW, vec![claude(vec![bucket("5-hour", Some(NOW + H))])]),
+            &ALL,
+        );
+        gains(&mut s, Some(2));
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(serde_json::from_str::<ResetState>(&json).unwrap(), s);
+        assert!(!json.contains('@'));
+    }
+
+    #[test]
+    fn old_file_without_counts_still_loads() {
+        let old = r#"{"claude:a|5-hour":{"reset_ms":1800003600000,"service":"claude","account_id":"claude:a","label":"Work","bucket":"5-hour"}}"#;
+        let s: ResetState = serde_json::from_str(old).unwrap();
+        assert_eq!(s.0.len(), 1);
+        assert_eq!(s.0["claude:a|5-hour"].label, "Work");
+        assert!(s.1.is_empty());
+        assert_eq!(
+            serde_json::from_str::<ResetState>("{}").unwrap(),
+            ResetState::default()
+        );
     }
 }

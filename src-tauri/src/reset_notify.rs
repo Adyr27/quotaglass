@@ -3,7 +3,7 @@
 
 use crate::notify::{provider_name, JsonStore};
 use crate::settings::{ResetToasts, ToastSound};
-use quotaglass_core::resets::{self, Due, ResetState, Switches};
+use quotaglass_core::resets::{self, Due, Gain, ResetState, Switches};
 use quotaglass_core::view::Snapshot;
 use quotaglass_core::Service;
 use std::sync::Mutex;
@@ -39,17 +39,24 @@ impl Resets {
         *crate::scheduler::lock(&self.toasts) = toasts.clone();
     }
 
-    /// One pass: tracks or takes due resets and saves the file when it changed. Takes no settings lock.
-    fn pass(&self, snapshot: Option<&Snapshot>, now_ms: i64) -> (Vec<Due>, ToastSound) {
+    /// One pass: tracks or takes due resets, and with a snapshot also finds new banked resets.
+    /// Saves the file when it changed. Takes no settings lock.
+    fn pass(&self, snapshot: Option<&Snapshot>, now_ms: i64) -> (Vec<Due>, Vec<Gain>, ToastSound) {
         let toasts = crate::scheduler::lock(&self.toasts).clone();
         let mut state = crate::scheduler::lock(&self.state);
-        let (due, changed) = step(&mut state, &toasts, snapshot, now_ms);
+        let (due, mut changed) = step(&mut state, &toasts, snapshot, now_ms);
+        let mut gains = Vec::new();
+        if let Some(s) = snapshot {
+            let (g, c) = step_banked(&mut state, &toasts, s);
+            gains = g;
+            changed |= c;
+        }
         if changed {
             if let Err(e) = self.store.save(&*state) {
                 tracing::warn!(error = ?e, "could not save resets.json");
             }
         }
-        (due, toasts.sound)
+        (due, gains, toasts.sound)
     }
 }
 
@@ -97,6 +104,32 @@ pub fn step(
     (due, changed)
 }
 
+/// Finds accounts whose banked reset count went up. Same switches as `step`: with the master switch off it
+/// does nothing and stores nothing. Returns the gains and whether the state changed.
+pub fn step_banked(
+    state: &mut ResetState,
+    toasts: &ResetToasts,
+    snapshot: &Snapshot,
+) -> (Vec<Gain>, bool) {
+    if !toasts.enabled {
+        return (Vec::new(), false);
+    }
+    let before = state.clone();
+    let gains = resets::track_banked(state, snapshot, &switches(toasts));
+    (gains, *state != before)
+}
+
+/// Title and body of the toast for a new banked reset. The body is the account label, so two Codex logins differ.
+pub fn gain_text(gain: &Gain) -> (String, String) {
+    (
+        format!(
+            "{}: a limit reset is available.",
+            provider_name(gain.service)
+        ),
+        gain.label.clone(),
+    )
+}
+
 /// Title and body of one reset toast.
 pub fn toast_text(due: &Due) -> (String, String) {
     let title = format!("{} · {} reset", provider_name(due.service), due.label);
@@ -136,9 +169,12 @@ fn run(app: &AppHandle, snapshot: Option<&Snapshot>) {
     let Some(resets) = app.try_state::<Resets>() else {
         return;
     };
-    let (due, sound) = resets.pass(snapshot, now_ms());
+    let (due, gains, sound) = resets.pass(snapshot, now_ms());
     for d in &due {
-        send(app, d, sound);
+        send(app, toast_text(d), d.service, sound);
+    }
+    for g in &gains {
+        send(app, gain_text(g), g.service, sound);
     }
 }
 
@@ -147,12 +183,11 @@ pub fn on_snapshot(app: &AppHandle, snapshot: &Snapshot) {
     run(app, Some(snapshot));
 }
 
-fn send(app: &AppHandle, due: &Due, sound: ToastSound) {
-    let (title, body) = toast_text(due);
+fn send(app: &AppHandle, (title, body): (String, String), service: Service, sound: ToastSound) {
     let mut toast = app
         .notification()
         .builder()
-        .id(toast_id(due.service))
+        .id(toast_id(service))
         .title(title)
         .body(body);
     if sound == ToastSound::Default {
@@ -351,9 +386,105 @@ mod tests {
         resets.set_toasts(&on());
         resets.pass(Some(&snap(NOW + 60_000)), NOW);
         assert!(dir.join("resets.json").exists(), "on: tracked and saved");
-        let (fired, sound) = resets.pass(None, NOW + 61_000);
+        let (fired, _, sound) = resets.pass(None, NOW + 61_000);
         assert_eq!(fired.len(), 1);
         assert_eq!(sound, ToastSound::Default);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn codex_snap(banked: Option<u32>) -> Snapshot {
+        let mut s = snap(NOW + 60_000);
+        s.accounts[0].id = "codex:0123456789abcdef".into();
+        s.accounts[0].service = Service::Codex;
+        s.accounts[0].label = "Work".into();
+        s.accounts[0].banked_resets = banked;
+        s.accounts[0].buckets.clear();
+        s
+    }
+
+    fn gained(state: &mut ResetState, banked: Option<u32>) -> usize {
+        step_banked(state, &on(), &codex_snap(banked)).0.len()
+    }
+
+    #[test]
+    fn gain_text_names_provider_and_account_only() {
+        let gain = Gain {
+            service: Service::Codex,
+            account_id: "codex:me@example.com".into(),
+            label: "Work".into(),
+        };
+        assert_eq!(
+            gain_text(&gain),
+            (
+                "Codex: a limit reset is available.".to_string(),
+                "Work".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn new_reset_sends_one_toast_per_increase() {
+        let mut state = ResetState::default();
+        assert_eq!(gained(&mut state, Some(0)), 0, "0 stored");
+        assert_eq!(gained(&mut state, Some(1)), 1, "0 to 1");
+        assert_eq!(gained(&mut state, Some(1)), 0, "1 to 1");
+        assert_eq!(gained(&mut state, Some(2)), 1, "1 to 2");
+    }
+
+    #[test]
+    fn restart_with_the_same_count_sends_none() {
+        let dir = std::env::temp_dir().join(format!("qg-resets-banked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = JsonStore::new(dir.join("resets.json"));
+        let mut state = ResetState::default();
+        assert_eq!(gained(&mut state, Some(0)), 0);
+        assert_eq!(gained(&mut state, Some(1)), 1);
+        store.save(&state).unwrap();
+
+        let mut restarted: ResetState = store.load();
+        assert_eq!(gained(&mut restarted, Some(1)), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn banked_follows_the_switches() {
+        let mut state = ResetState::default();
+        step_banked(&mut state, &on(), &codex_snap(Some(0)));
+        let off = ResetToasts::default();
+        assert_eq!(
+            step_banked(&mut state, &off, &codex_snap(Some(1))),
+            (vec![], false),
+            "master switch off: nothing stored, nothing sent"
+        );
+        let codex_off = ResetToasts {
+            codex: false,
+            ..on()
+        };
+        let (g, changed) = step_banked(&mut state, &codex_off, &codex_snap(Some(1)));
+        assert!(g.is_empty() && changed && state.1.is_empty());
+    }
+
+    /// 5a found no readable expiry date, so time passing alone never sends a toast.
+    #[test]
+    fn no_expiry_toast_without_an_expiry_date() {
+        let mut state = ResetState::default();
+        gained(&mut state, Some(0));
+        gained(&mut state, Some(1));
+        let month = 30 * 86_400_000;
+        assert_eq!(step(&mut state, &on(), None, NOW + month), (vec![], false));
+        assert_eq!(state.1.len(), 1, "the count stays");
+    }
+
+    #[test]
+    fn pass_returns_the_gain_and_saves() {
+        let dir = std::env::temp_dir().join(format!("qg-resets-gain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let resets = Resets::new(JsonStore::new(dir.join("resets.json")), on());
+        assert!(resets.pass(Some(&codex_snap(Some(0))), NOW).1.is_empty());
+        let (_, gains, _) = resets.pass(Some(&codex_snap(Some(1))), NOW);
+        assert_eq!(gains.len(), 1);
+        let saved: ResetState = JsonStore::new(dir.join("resets.json")).load();
+        assert_eq!(saved.1.values().copied().collect::<Vec<_>>(), vec![1]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -108,7 +108,7 @@ fn tray_stream() -> impl Stream<Item = TrayEvent> {
     })
 }
 
-/// Synthesizes a 4x4 supersampled RGBA icon matching QuotaGlass's ring mark (`src-tauri/icons/source.svg`).
+/// Synthesizes a 4x4 supersampled RGBA icon matching QuotaGlass's ring mark.
 pub fn build_ring_icon_rgba(size: u32) -> Vec<u8> {
     let s = size.max(1) as usize;
     let mut rgba = vec![0u8; s * s * 4];

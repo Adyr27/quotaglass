@@ -19,13 +19,6 @@ jobs:
         with:
           toolchain: 1.99.1
           components: rustfmt, clippy
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm audit --audit-level=high --omit=dev
-      - run: npm run build
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked

@@ -99,8 +99,6 @@ Commands:
 2. `cargo run -p quotaglass-app`
 3. `cargo build --release -p quotaglass-app` (outputs `target/release/quotaglass-app.exe`)
 
-The legacy v0.4.0 Tauri app remains in `src-tauri/` for rollback if needed.
-
 ## License
 
 MIT. See `LICENSE`.

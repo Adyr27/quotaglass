@@ -27,12 +27,16 @@ use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-/// Language-server images, compared without case. The app window (`Antigravity.exe`, also used by `agy` sidecars)
-/// is not one of them.
-const IMAGES: [&str; 2] = ["language_server.exe", "language_server_windows_x64.exe"];
-/// Folder that must appear in the executable path (compared without case), so a Windsurf or Codeium language
-/// server is never read as Antigravity.
-const APP_FOLDER: &str = r"\antigravity\";
+/// Paired `(image name, required path folder)` rules, compared without case.
+/// The app window (`Antigravity.exe`, also used by sidecars) and Windsurf/Codeium or unmatched `agy.exe` paths
+/// are excluded.
+const IMAGE_RULES: [(&str, &str); 3] = [
+    ("language_server.exe", r"\antigravity\"),
+    ("language_server_windows_x64.exe", r"\antigravity\"),
+    ("agy.exe", r"\antigravity-acp\"),
+];
+/// Language-server image names passed to `native::processes`.
+const IMAGES: [&str; 3] = [IMAGE_RULES[0].0, IMAGE_RULES[1].0, IMAGE_RULES[2].0];
 const STATUS_PATH: &str = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
 const QUOTA_PATH: &str = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
 /// Upper bound on one whole `fetch`: process discovery plus every port.
@@ -116,12 +120,14 @@ async fn read_ports(
 type PortReading = (Option<String>, Option<String>, Vec<Bucket>);
 
 async fn read_port(http: &HttpClient, port: u16) -> Result<PortReading, FetchError> {
-    // A port that refuses or stalls on `GET /` is not the language server: skip it before two more requests.
+    // A port that refuses, stalls, or returns 400 (plain HTTP sent to an HTTPS port) on `GET /` is not the
+    // plain-HTTP language server: skip it before two more requests.
     let csrf = match http.get_loopback(port, "/").await {
         Ok(page) => parse_csrf(&String::from_utf8_lossy(&page)),
-        Err(e @ (FetchError::Timeout | FetchError::Network(NetErrorKind::Connect))) => {
-            return Err(e)
-        }
+        Err(
+            e @ (FetchError::Timeout
+            | FetchError::Network(NetErrorKind::Connect | NetErrorKind::Status(400))),
+        ) => return Err(e),
         Err(_) => None,
     };
     let (email, plan) = match http
@@ -138,8 +144,7 @@ async fn read_port(http: &HttpClient, port: u16) -> Result<PortReading, FetchErr
     Ok((email, plan, parse_quota_summary(&body)?))
 }
 
-/// PIDs of `(pid, executable path)` rows whose file name is one of `IMAGES` and whose path contains `APP_FOLDER`, in
-/// order, without repeats.
+/// PIDs of `(pid, executable path)` rows matching `IMAGE_RULES`, in order, without repeats.
 pub fn app_server_pids(rows: impl IntoIterator<Item = (u32, String)>) -> Vec<u32> {
     let mut pids = Vec::new();
     for (pid, path) in rows {
@@ -152,8 +157,10 @@ pub fn app_server_pids(rows: impl IntoIterator<Item = (u32, String)>) -> Vec<u32
 
 fn is_app_server(path: &str) -> bool {
     let name = path.rsplit('\\').next().unwrap_or(path);
-    IMAGES.iter().any(|i| name.eq_ignore_ascii_case(i))
-        && path.to_ascii_lowercase().contains(APP_FOLDER)
+    let lower = path.to_ascii_lowercase();
+    IMAGE_RULES
+        .iter()
+        .any(|(image, folder)| name.eq_ignore_ascii_case(image) && lower.contains(folder))
 }
 
 /// One listening IPv4 TCP socket.
@@ -543,6 +550,45 @@ mod tests {
         assert!(app_server_pids(Vec::new()).is_empty());
     }
 
+    #[test]
+    fn app_server_pids_accepts_antigravity_acp_agy_and_rejects_unmatched() {
+        assert_eq!(
+            IMAGES,
+            [
+                "language_server.exe",
+                "language_server_windows_x64.exe",
+                "agy.exe",
+            ]
+        );
+        let rows = vec![
+            row(
+                1001,
+                r"C:\App\antigravity\resources\bin\language_server.exe",
+            ),
+            row(
+                1002,
+                r"C:\App\antigravity-acp\win32-x64\versions\abc123\agy.exe",
+            ),
+            row(
+                1003,
+                r"D:\TOOLS\ANTIGRAVITY-ACP\WIN32-X64\VERSIONS\DEF456\AGY.EXE",
+            ),
+            row(
+                1002,
+                r"C:\App\antigravity-acp\win32-x64\versions\abc123\agy.exe",
+            ),
+            // Negative cases: wrong folder or wrong image name.
+            row(2001, r"C:\App\antigravity\agy.exe"),
+            row(2002, r"C:\Program Files\OtherTool\agy.exe"),
+            row(2003, r"C:\App\Windsurf\resources\bin\agy.exe"),
+            row(2004, r"C:\App\Codeium\resources\bin\language_server.exe"),
+            row(2005, r"C:\App\antigravity-acp\language_server.exe"),
+            row(2006, r"C:\App\antigravity-acp\Antigravity.exe"),
+            row(2007, r"C:\App\antigravity-acp\agy.exe.bak"),
+        ];
+        assert_eq!(app_server_pids(rows), vec![1001, 1002, 1003]);
+    }
+
     fn listener(addr: [u8; 4], port: u16, pid: u32) -> Listener {
         Listener { addr, port, pid }
     }
@@ -799,6 +845,47 @@ mod tests {
             read_ports(&http, &[port_of(&server)], NOW).await,
             Err(FetchError::NotDetected)
         );
+    }
+
+    #[tokio::test]
+    async fn read_ports_skips_https_400_port_and_probes_agy_404_without_csrf() {
+        let https_port = MockServer::start(vec![(400, "", "Bad Request".to_string())]);
+        let agy_port = MockServer::start(vec![
+            (404, "", String::new()),
+            (
+                200,
+                "",
+                r#"{"userStatus":{"email":"dev@example.com","planStatus":{"planInfo":{"planName":"Pro"}}}}"#
+                    .to_string(),
+            ),
+            (200, "", QUOTA.to_string()),
+        ]);
+        let http = HttpClient::new().unwrap();
+        let readings = read_ports(&http, &[port_of(&https_port), port_of(&agy_port)], NOW)
+            .await
+            .unwrap();
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].plan.as_deref(), Some("Pro"));
+        assert_eq!(readings[0].buckets.len(), 4);
+        assert_eq!(
+            https_port.hits(),
+            1,
+            "400 on GET / must skip the two POST calls"
+        );
+        assert_eq!(agy_port.hits(), 3);
+        let req = agy_port.last_request.lock().unwrap().to_ascii_lowercase();
+        assert!(!req.contains("x-codeium-csrf-token"));
+    }
+
+    #[tokio::test]
+    async fn read_ports_only_400_port_returns_not_detected_after_one_probe() {
+        let https_port = MockServer::start(vec![(400, "", "Bad Request".to_string())]);
+        let http = HttpClient::new().unwrap();
+        assert_eq!(
+            read_ports(&http, &[port_of(&https_port)], NOW).await,
+            Err(FetchError::NotDetected)
+        );
+        assert_eq!(https_port.hits(), 1);
     }
 
     #[tokio::test]

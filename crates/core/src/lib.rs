@@ -27,5 +27,5 @@ pub use model::{
 };
 pub use net::{HeaderValueSource, Host, HttpClient};
 pub use provider::{BoxFut, Provider, SourceOutcome};
-pub use ratelimit::{rate_limit_wait_secs, RATE_LIMIT_CAP_SECS};
+pub use ratelimit::{rate_limit_wait_secs, stagger_offset_secs, RATE_LIMIT_CAP_SECS};
 pub use secret::Secret;

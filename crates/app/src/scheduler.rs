@@ -75,7 +75,10 @@ struct Entry {
 
 impl Entry {
     fn is_claude(&self) -> bool {
-        matches!(self.target, Target::ClaudeCurrent | Target::ClaudeProfile(_))
+        matches!(
+            self.target,
+            Target::ClaudeCurrent | Target::ClaudeProfile(_)
+        )
     }
 
     fn role(&self) -> TaskRole {
@@ -310,7 +313,10 @@ async fn run_loop<F, Fut>(
             } else {
                 Duration::ZERO
             };
-            timer = ticker(Instant::now() + Duration::from_secs(period) + stagger, period);
+            timer = ticker(
+                Instant::now() + Duration::from_secs(period) + stagger,
+                period,
+            );
         }
     }
 }
@@ -643,7 +649,8 @@ impl Scheduler {
         let now = Instant::now();
         {
             let mut last = lock(&self.last_open_refresh);
-            if last.is_some_and(|prev| now.saturating_duration_since(prev) < OPEN_REFRESH_DEBOUNCE) {
+            if last.is_some_and(|prev| now.saturating_duration_since(prev) < OPEN_REFRESH_DEBOUNCE)
+            {
                 return false;
             }
             *last = Some(now);
@@ -756,8 +763,7 @@ mod tests {
     const NOW: i64 = 1_800_000_000_000;
 
     fn temp_home(name: &str) -> PathBuf {
-        let d =
-            std::env::temp_dir().join(format!("qg-app-sched-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("qg-app-sched-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -1168,7 +1174,10 @@ mod tests {
         assert!(!sched.refresh_now());
         assert!(!sched.refresh_on_open());
         assert!(!sched.is_refreshing());
-        assert!(rx.try_recv().is_err(), "no Refreshing event emitted when 0 providers");
+        assert!(
+            rx.try_recv().is_err(),
+            "no Refreshing event emitted when 0 providers"
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 }

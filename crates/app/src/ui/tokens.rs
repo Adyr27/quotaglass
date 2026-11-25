@@ -13,10 +13,7 @@ use quotaglass_core::Service;
 pub const UI_FONT: Font = Font::with_name("Segoe UI");
 
 pub const fn ui_font(weight: font::Weight) -> Font {
-    Font {
-        weight,
-        ..UI_FONT
-    }
+    Font { weight, ..UI_FONT }
 }
 
 /// Layer 1: Primitive design constants (raw brand hues, semantic palette, radii, spacing, type).
@@ -587,9 +584,17 @@ impl DesignTokens {
             return self.quiet_button_style(false, status);
         }
         let (bg, text_color) = match status {
-            button::Status::Disabled => (self.semantic.surface_control, self.semantic.text_disabled),
-            button::Status::Pressed => (self.semantic.seg_active_pressed_bg, self.semantic.seg_active_ink),
-            button::Status::Hovered => (self.semantic.seg_active_hover_bg, self.semantic.seg_active_ink),
+            button::Status::Disabled => {
+                (self.semantic.surface_control, self.semantic.text_disabled)
+            }
+            button::Status::Pressed => (
+                self.semantic.seg_active_pressed_bg,
+                self.semantic.seg_active_ink,
+            ),
+            button::Status::Hovered => (
+                self.semantic.seg_active_hover_bg,
+                self.semantic.seg_active_ink,
+            ),
             button::Status::Active => (self.semantic.seg_active_bg, self.semantic.seg_active_ink),
         };
         let has_border = self.semantic.seg_active_border.a > 0.0;
@@ -657,7 +662,9 @@ impl DesignTokens {
                 },
                 self.semantic.primary_ink,
             ),
-            button::Status::Disabled => (self.semantic.surface_control, self.semantic.text_disabled),
+            button::Status::Disabled => {
+                (self.semantic.surface_control, self.semantic.text_disabled)
+            }
         };
         button::Style {
             background: Some(Background::Color(bg)),
@@ -681,8 +688,14 @@ impl DesignTokens {
                 },
                 self.semantic.text_disabled,
             ),
-            button::Status::Pressed => (self.semantic.surface_control_pressed, self.semantic.text_primary),
-            button::Status::Hovered => (self.semantic.surface_control_hover, self.semantic.text_primary),
+            button::Status::Pressed => (
+                self.semantic.surface_control_pressed,
+                self.semantic.text_primary,
+            ),
+            button::Status::Hovered => (
+                self.semantic.surface_control_hover,
+                self.semantic.text_primary,
+            ),
             button::Status::Active => (
                 if active {
                     self.semantic.surface_tab_active
@@ -716,8 +729,14 @@ impl DesignTokens {
     pub fn ghost_button_style(&self, status: button::Status) -> button::Style {
         let (bg, text_color) = match status {
             button::Status::Disabled => (Color::TRANSPARENT, self.semantic.text_disabled),
-            button::Status::Pressed => (self.semantic.surface_control_pressed, self.semantic.text_primary),
-            button::Status::Hovered => (self.semantic.surface_control_hover, self.semantic.text_primary),
+            button::Status::Pressed => (
+                self.semantic.surface_control_pressed,
+                self.semantic.text_primary,
+            ),
+            button::Status::Hovered => (
+                self.semantic.surface_control_hover,
+                self.semantic.text_primary,
+            ),
             button::Status::Active => (Color::TRANSPARENT, self.semantic.text_secondary),
         };
         button::Style {
@@ -735,9 +754,17 @@ impl DesignTokens {
 
     pub fn danger_button_style(&self, status: button::Status) -> button::Style {
         let (bg, text_color) = match status {
-            button::Status::Disabled => (self.semantic.surface_control, self.semantic.text_disabled),
-            button::Status::Pressed => (self.semantic.danger_btn_pressed_bg, self.semantic.danger_btn_ink),
-            button::Status::Hovered => (self.semantic.danger_btn_hover_bg, self.semantic.danger_btn_ink),
+            button::Status::Disabled => {
+                (self.semantic.surface_control, self.semantic.text_disabled)
+            }
+            button::Status::Pressed => (
+                self.semantic.danger_btn_pressed_bg,
+                self.semantic.danger_btn_ink,
+            ),
+            button::Status::Hovered => (
+                self.semantic.danger_btn_hover_bg,
+                self.semantic.danger_btn_ink,
+            ),
             button::Status::Active => (self.semantic.danger_btn_bg, self.semantic.danger_btn_ink),
         };
         button::Style {
@@ -757,7 +784,9 @@ impl DesignTokens {
         let border_color = match status {
             text_input::Status::Focused { .. } => self.semantic.card_border_expanded,
             text_input::Status::Hovered => self.semantic.text_muted,
-            text_input::Status::Active | text_input::Status::Disabled => self.semantic.border_subtle,
+            text_input::Status::Active | text_input::Status::Disabled => {
+                self.semantic.border_subtle
+            }
         };
         text_input::Style {
             background: Background::Color(self.semantic.surface_control),
@@ -935,8 +964,14 @@ mod tests {
     #[test]
     fn brand_accents_match_quotaglass_identity() {
         let t = DesignTokens::resolve(Theme::Dark, GlassMode::LiquidGlass, true, true);
-        assert_eq!(t.service_accent(Service::Claude).into_rgba8(), [0xd9, 0x77, 0x57, 0xff]);
-        assert_eq!(t.service_accent(Service::Codex).into_rgba8(), [0x10, 0xa3, 0x7f, 0xff]);
+        assert_eq!(
+            t.service_accent(Service::Claude).into_rgba8(),
+            [0xd9, 0x77, 0x57, 0xff]
+        );
+        assert_eq!(
+            t.service_accent(Service::Codex).into_rgba8(),
+            [0x10, 0xa3, 0x7f, 0xff]
+        );
         assert_eq!(
             t.service_accent(Service::Antigravity).into_rgba8(),
             [0x4c, 0x8d, 0xf6, 0xff]
@@ -1012,9 +1047,15 @@ mod tests {
     fn danger_and_warn_colors_stay_vivid_never_pastel_pink_or_muddy() {
         let dark_d = p::DANGER_DARK.into_rgba8();
         assert_eq!(dark_d[0], 0xff);
-        assert!(dark_d[1] <= 0x6e && dark_d[2] <= 0x6e, "DANGER_DARK must stay true vivid red, got {dark_d:?}");
+        assert!(
+            dark_d[1] <= 0x6e && dark_d[2] <= 0x6e,
+            "DANGER_DARK must stay true vivid red, got {dark_d:?}"
+        );
         let dark_w = p::WARN_DARK.into_rgba8();
-        assert!(dark_w[0] >= 0xf0 && dark_w[1] <= 0xb0 && dark_w[2] <= 0x35, "WARN_DARK must stay warm amber, got {dark_w:?}");
+        assert!(
+            dark_w[0] >= 0xf0 && dark_w[1] <= 0xb0 && dark_w[2] <= 0x35,
+            "WARN_DARK must stay warm amber, got {dark_w:?}"
+        );
         assert_eq!(p::DANGER_LIGHT.into_rgba8(), [0xc4, 0x24, 0x2a, 0xff]);
         assert_eq!(p::WARN_LIGHT.into_rgba8(), [0x9e, 0x5a, 0x00, 0xff]);
     }
@@ -1070,15 +1111,16 @@ mod tests {
                         contrast_ratio(dark.semantic.text_muted, dark_bg) >= mut_min,
                         "dark muted text contrast too low for {mode:?} os_glass={os_glass} matched={dark_matched}"
                     );
-                    assert!(
-                        contrast_ratio(dark.semantic.best_ink, dark.semantic.best_bg) >= 12.0
-                    );
+                    assert!(contrast_ratio(dark.semantic.best_ink, dark.semantic.best_bg) >= 12.0);
                     let burn_bg_d = composite_over(dark.semantic.burn_bg, dark_bg);
                     assert!(
                         contrast_ratio(dark.semantic.burn_ink, burn_bg_d) >= 4.5,
                         "dark burn chip ink contrast too low for {mode:?} os_glass={os_glass}"
                     );
-                    for btn_bg in [dark.semantic.danger_btn_bg, dark.semantic.danger_btn_hover_bg] {
+                    for btn_bg in [
+                        dark.semantic.danger_btn_bg,
+                        dark.semantic.danger_btn_hover_bg,
+                    ] {
                         let dbtn_comp = composite_over(btn_bg, dark_bg);
                         assert!(
                             contrast_ratio(dark.semantic.danger_btn_ink, dbtn_comp) >= 4.5,
@@ -1130,7 +1172,10 @@ mod tests {
                         contrast_ratio(light.semantic.burn_ink, burn_bg_l) >= 4.5,
                         "light burn chip ink contrast too low for {mode:?} os_glass={os_glass}"
                     );
-                    for btn_bg in [light.semantic.danger_btn_bg, light.semantic.danger_btn_hover_bg] {
+                    for btn_bg in [
+                        light.semantic.danger_btn_bg,
+                        light.semantic.danger_btn_hover_bg,
+                    ] {
                         let dbtn_comp = composite_over(btn_bg, light_bg);
                         assert!(
                             contrast_ratio(light.semantic.danger_btn_ink, dbtn_comp) >= 4.5,

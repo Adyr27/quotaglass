@@ -39,7 +39,9 @@ pub fn view<'a>(tokens: &DesignTokens) -> Element<'a, UiMessage> {
             container(
                 row![
                     icons::tinted_svg(icons::BACK_SVG, 14.0, t.semantic.text_primary),
-                    text("Back").size(p::TEXT_SM).font(ui_font(font::Weight::Medium)),
+                    text("Back")
+                        .size(p::TEXT_SM)
+                        .font(ui_font(font::Weight::Medium)),
                 ]
                 .spacing(5.0)
                 .align_y(Alignment::Center),

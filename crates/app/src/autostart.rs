@@ -12,9 +12,7 @@ pub fn format_run_value(exe: &Path) -> Result<String, &'static str> {
     if !exe.is_absolute() {
         return Err("Executable path must be absolute.");
     }
-    let raw = exe
-        .to_str()
-        .ok_or("Executable path is not valid UTF-8.")?;
+    let raw = exe.to_str().ok_or("Executable path is not valid UTF-8.")?;
     if raw.is_empty() {
         return Err("Executable path cannot be empty.");
     }
@@ -140,8 +138,8 @@ mod imp {
         if enabled {
             let formatted = format_run_value(exe)?;
             let data = wide(&formatted);
-            let byte_len =
-                u32::try_from(std::mem::size_of_val(data.as_slice())).map_err(|_| "Path too long.")?;
+            let byte_len = u32::try_from(std::mem::size_of_val(data.as_slice()))
+                .map_err(|_| "Path too long.")?;
             // SAFETY: `key.0` is opened with `KEY_SET_VALUE`, `name` and `data` are null-terminated UTF-16,
             // and `byte_len` equals the exact byte size of `data`.
             let err = unsafe {

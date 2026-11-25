@@ -80,7 +80,10 @@ pub fn view<'a>(
                             .size(p::TEXT_BASE)
                             .font(ui_font(font::Weight::Medium))
                             .color(t.semantic.text_primary),
-                        text(note).size(p::TEXT_XS).line_height(1.3).color(t.semantic.text_muted),
+                        text(note)
+                            .size(p::TEXT_XS)
+                            .line_height(1.3)
+                            .color(t.semantic.text_muted),
                     ]
                     .spacing(2.0)
                     .width(Length::Fill),
@@ -125,9 +128,13 @@ pub fn view<'a>(
         space::horizontal(),
         button(
             container(
-                text(if any_connected { "Continue" } else { "Skip for now" })
-                    .size(p::TEXT_SM)
-                    .font(ui_font(font::Weight::Semibold)),
+                text(if any_connected {
+                    "Continue"
+                } else {
+                    "Skip for now"
+                })
+                .size(p::TEXT_SM)
+                .font(ui_font(font::Weight::Semibold)),
             )
             .center_y(Length::Fill),
         )

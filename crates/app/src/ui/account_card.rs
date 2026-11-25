@@ -5,8 +5,8 @@ use crate::state::format_reset_time;
 use crate::ui::icons;
 use crate::ui::tokens::{primitives as p, ui_font, DesignTokens};
 use crate::ui::{
-    forecast_line, friendly_state_notice, resets_chip_text, sentence_case,
-    sign_in_button_label, status_dot, used_whole, UiMessage, UiState,
+    forecast_line, friendly_state_notice, resets_chip_text, sentence_case, sign_in_button_label,
+    status_dot, used_whole, UiMessage, UiState,
 };
 use iced::border;
 use iced::font;
@@ -57,13 +57,21 @@ impl<Message> canvas::Program<Message> for PaceStripCanvas {
         // Nine 10% divider ticks inside the meter.
         for step in 1..10 {
             let tx = w * (step as f32 / 10.0);
-            frame.fill_rectangle(Point::new(tx - 0.5, 0.0), Size::new(1.0, h), self.tick_color);
+            frame.fill_rectangle(
+                Point::new(tx - 0.5, 0.0),
+                Size::new(1.0, h),
+                self.tick_color,
+            );
         }
 
         // Elapsed-time vertical pace marker when window length and reset timestamp exist.
         if let Some(passed) = self.passed_fraction {
             let px = (w * passed.clamp(0.0, 1.0)).clamp(1.0, (w - 2.0).max(1.0));
-            frame.fill_rectangle(Point::new(px - 1.0, -1.0), Size::new(2.0, h + 2.0), self.pace_color);
+            frame.fill_rectangle(
+                Point::new(px - 1.0, -1.0),
+                Size::new(2.0, h + 2.0),
+                self.pace_color,
+            );
         }
 
         vec![frame.into_geometry()]
@@ -91,7 +99,10 @@ impl<Message> canvas::Program<Message> for ShimmerCanvas {
         let w = bounds.width.max(1.0);
         let h = bounds.height.max(1.0);
         let r = border::radius(h * 0.5);
-        frame.fill(&Path::rounded_rectangle(Point::ORIGIN, Size::new(w, h), r), self.base_color);
+        frame.fill(
+            &Path::rounded_rectangle(Point::ORIGIN, Size::new(w, h), r),
+            self.base_color,
+        );
 
         let band_w = (w * 0.36).max(28.0);
         let x = -band_w + (w + band_w * 2.0) * self.phase.clamp(0.0, 1.0);
@@ -110,7 +121,12 @@ impl<Message> canvas::Program<Message> for ShimmerCanvas {
     }
 }
 
-fn bucket_fill_color(tokens: &DesignTokens, service: Service, b: &BucketView, stale: bool) -> Color {
+fn bucket_fill_color(
+    tokens: &DesignTokens,
+    service: Service,
+    b: &BucketView,
+    stale: bool,
+) -> Color {
     let base = if b.fast_burn || b.limit_reached {
         tokens.semantic.danger
     } else if b.used_percent >= 80.0 {
@@ -134,9 +150,7 @@ fn pace_strip<'a>(
 ) -> Element<'a, UiMessage> {
     let target = (b.used_percent as f32 / 100.0).clamp(0.0, 1.0);
     let fill_fraction = ui.animations.bar_fill(&account.id, &b.name, target);
-    let passed_fraction = b
-        .passed_percent
-        .map(|p| (p as f32 / 100.0).clamp(0.0, 1.0));
+    let passed_fraction = b.passed_percent.map(|p| (p as f32 / 100.0).clamp(0.0, 1.0));
     let stale = b.freshness == Freshness::Stale;
 
     Canvas::new(PaceStripCanvas {
@@ -285,7 +299,13 @@ pub fn view<'a>(
         let count = account.banked_resets.unwrap_or(0);
         title_row = title_row.push(chip(
             resets_chip_text(count),
-            move |_| t.chip_style(t.semantic.surface_control, t.semantic.text_primary, t.semantic.border_subtle),
+            move |_| {
+                t.chip_style(
+                    t.semantic.surface_control,
+                    t.semantic.text_primary,
+                    t.semantic.border_subtle,
+                )
+            },
             p::TEXT_XS,
             font::Weight::Medium,
         ));
@@ -318,9 +338,11 @@ pub fn view<'a>(
     if !expanded {
         if let Some(b) = headline {
             header_col = header_col.push(pace_strip(&t, account, b, 8.0, ui));
-            let mut meta = row![text(b.name.clone()).size(p::TEXT_XS).color(t.semantic.text_muted)]
-                .spacing(6.0)
-                .align_y(Alignment::Center);
+            let mut meta = row![text(b.name.clone())
+                .size(p::TEXT_XS)
+                .color(t.semantic.text_muted)]
+            .spacing(6.0)
+            .align_y(Alignment::Center);
             let reset = reset_label(b, now_ms);
             if !reset.is_empty() {
                 meta = meta.push(text("·").size(p::TEXT_XS).color(t.semantic.text_muted));
@@ -341,7 +363,12 @@ pub fn view<'a>(
             | quotaglass_core::view::CardState::Error => t.semantic.warn,
             _ => t.semantic.text_secondary,
         };
-        header_col = header_col.push(text(notice).size(p::TEXT_SM).line_height(1.3).color(notice_color));
+        header_col = header_col.push(
+            text(notice)
+                .size(p::TEXT_SM)
+                .line_height(1.3)
+                .color(notice_color),
+        );
     }
 
     let clickable_header: Element<'a, UiMessage> = MouseArea::new(header_col)
@@ -358,15 +385,16 @@ pub fn view<'a>(
         if !account.buckets.is_empty() {
             let mut buckets_col = column![].spacing(10.0);
             for b in &account.buckets {
-                let mut foot = row![text(reset_label(b, now_ms))
-                    .size(p::TEXT_XS)
-                    .color(if b.limit_reached {
-                        t.semantic.danger
-                    } else {
-                        t.semantic.text_muted
-                    })]
-                .spacing(6.0)
-                .align_y(Alignment::Center);
+                let mut foot =
+                    row![text(reset_label(b, now_ms))
+                        .size(p::TEXT_XS)
+                        .color(if b.limit_reached {
+                            t.semantic.danger
+                        } else {
+                            t.semantic.text_muted
+                        })]
+                    .spacing(6.0)
+                    .align_y(Alignment::Center);
                 foot = foot.push(space::horizontal());
                 if b.fast_burn {
                     foot = foot.push(burn_chip(&t));
@@ -396,11 +424,11 @@ pub fn view<'a>(
 
         if let Some(forecast) = forecast_line(account.forecast_mins) {
             let warn = account.forecast_mins.is_some_and(|m| m < 30);
-            card_body = card_body.push(
-                text(forecast)
-                    .size(p::TEXT_SM)
-                    .color(if warn { t.semantic.warn } else { t.semantic.text_secondary }),
-            );
+            card_body = card_body.push(text(forecast).size(p::TEXT_SM).color(if warn {
+                t.semantic.warn
+            } else {
+                t.semantic.text_secondary
+            }));
         }
 
         // Inline reset/check/redeem controls right inside this account card.
@@ -420,7 +448,9 @@ pub fn view<'a>(
                             button(
                                 container(
                                     row![
-                                        text("Redeem").size(p::TEXT_SM).font(ui_font(font::Weight::Medium)),
+                                        text("Redeem")
+                                            .size(p::TEXT_SM)
+                                            .font(ui_font(font::Weight::Medium)),
                                         icons::tinted_svg(
                                             icons::EXTERNAL_SVG,
                                             12.0,
@@ -455,59 +485,55 @@ pub fn view<'a>(
                 }
             }
             Service::Claude => {
-                card_body = card_body.push(
-                    row![
-                        button(
-                            container(
-                                row![
-                                    text("Check limit resets").size(p::TEXT_SM),
-                                    icons::tinted_svg(
-                                        icons::EXTERNAL_SVG,
-                                        12.0,
-                                        t.semantic.text_secondary,
-                                    ),
-                                ]
-                                .spacing(5.0)
-                                .align_y(Alignment::Center),
-                            )
-                            .center_y(Length::Fill),
+                card_body = card_body.push(row![
+                    button(
+                        container(
+                            row![
+                                text("Check limit resets").size(p::TEXT_SM),
+                                icons::tinted_svg(
+                                    icons::EXTERNAL_SVG,
+                                    12.0,
+                                    t.semantic.text_secondary,
+                                ),
+                            ]
+                            .spacing(5.0)
+                            .align_y(Alignment::Center),
                         )
-                        .padding([0.0, 12.0])
-                        .height(Length::Fixed(36.0))
-                        .style(move |_, status| t.quiet_button_style(false, status))
-                        .on_press(UiMessage::OpenUrl(UrlTarget::ClaudeUsage)),
-                        space::horizontal(),
-                    ],
-                );
+                        .center_y(Length::Fill),
+                    )
+                    .padding([0.0, 12.0])
+                    .height(Length::Fixed(36.0))
+                    .style(move |_, status| t.quiet_button_style(false, status))
+                    .on_press(UiMessage::OpenUrl(UrlTarget::ClaudeUsage)),
+                    space::horizontal(),
+                ]);
             }
             Service::Antigravity => {}
         }
 
         // Inline rename form when active for this card.
         if let Some(draft) = ui.rename.as_ref().filter(|r| r.account_id == account.id) {
-            let mut rename_col = column![
-                row![
-                    text_input("Account name (max 40 chars)", &draft.text)
-                        .on_input(UiMessage::RenameDraftChanged)
-                        .on_submit(UiMessage::SubmitRename)
-                        .size(p::TEXT_SM)
-                        .padding([7.0, 10.0])
-                        .width(Length::Fill)
-                        .style(move |_, status| t.text_input_style(status)),
-                    button(container(text("Save").size(p::TEXT_SM)).center_y(Length::Fill))
-                        .padding([0.0, 12.0])
-                        .height(Length::Fixed(36.0))
-                        .style(move |_, status| t.primary_button_style(status))
-                        .on_press(UiMessage::SubmitRename),
-                    button(container(text("Cancel").size(p::TEXT_SM)).center_y(Length::Fill))
-                        .padding([0.0, 10.0])
-                        .height(Length::Fixed(36.0))
-                        .style(move |_, status| t.quiet_button_style(false, status))
-                        .on_press(UiMessage::CancelRename),
-                ]
-                .spacing(6.0)
-                .align_y(Alignment::Center),
+            let mut rename_col = column![row![
+                text_input("Account name (max 40 chars)", &draft.text)
+                    .on_input(UiMessage::RenameDraftChanged)
+                    .on_submit(UiMessage::SubmitRename)
+                    .size(p::TEXT_SM)
+                    .padding([7.0, 10.0])
+                    .width(Length::Fill)
+                    .style(move |_, status| t.text_input_style(status)),
+                button(container(text("Save").size(p::TEXT_SM)).center_y(Length::Fill))
+                    .padding([0.0, 12.0])
+                    .height(Length::Fixed(36.0))
+                    .style(move |_, status| t.primary_button_style(status))
+                    .on_press(UiMessage::SubmitRename),
+                button(container(text("Cancel").size(p::TEXT_SM)).center_y(Length::Fill))
+                    .padding([0.0, 10.0])
+                    .height(Length::Fixed(36.0))
+                    .style(move |_, status| t.quiet_button_style(false, status))
+                    .on_press(UiMessage::CancelRename),
             ]
+            .spacing(6.0)
+            .align_y(Alignment::Center),]
             .spacing(5.0);
             if let Some(err) = draft.error {
                 rename_col = rename_col.push(text(err).size(p::TEXT_XS).color(t.semantic.danger));
@@ -531,15 +557,21 @@ pub fn view<'a>(
                     row![
                         button(
                             container(
-                                text(if removing { "Removing..." } else { "Confirm remove" })
-                                    .size(p::TEXT_SM),
+                                text(if removing {
+                                    "Removing..."
+                                } else {
+                                    "Confirm remove"
+                                })
+                                .size(p::TEXT_SM),
                             )
                             .center_y(Length::Fill),
                         )
                         .padding([0.0, 12.0])
                         .height(Length::Fixed(36.0))
                         .style(move |_, status| t.danger_button_style(status))
-                        .on_press_maybe((!removing).then(|| UiMessage::ConfirmRemove(account.id.clone()))),
+                        .on_press_maybe(
+                            (!removing).then(|| UiMessage::ConfirmRemove(account.id.clone()))
+                        ),
                         button(container(text("Cancel").size(p::TEXT_SM)).center_y(Length::Fill))
                             .padding([0.0, 12.0])
                             .height(Length::Fixed(36.0))
@@ -561,8 +593,12 @@ pub fn view<'a>(
             let mut action_row = row![
                 button(
                     container(
-                        text(if refresh_busy { "Refreshing..." } else { "Refresh" })
-                            .size(p::TEXT_SM),
+                        text(if refresh_busy {
+                            "Refreshing..."
+                        } else {
+                            "Refresh"
+                        })
+                        .size(p::TEXT_SM),
                     )
                     .center_y(Length::Fill),
                 )
@@ -590,7 +626,9 @@ pub fn view<'a>(
                         .padding([0.0, 11.0])
                         .height(Length::Fixed(36.0))
                         .style(move |_, status| t.primary_button_style(status))
-                        .on_press_maybe((!signing_in).then(|| UiMessage::SignInAccount(account.id.clone()))),
+                        .on_press_maybe(
+                            (!signing_in).then(|| UiMessage::SignInAccount(account.id.clone())),
+                        ),
                 );
             }
 
@@ -600,8 +638,7 @@ pub fn view<'a>(
                 action_row = action_row.push(
                     button(
                         container(
-                            text(if removing { "Removing..." } else { "Remove" })
-                                .size(p::TEXT_SM),
+                            text(if removing { "Removing..." } else { "Remove" }).size(p::TEXT_SM),
                         )
                         .center_y(Length::Fill),
                     )

@@ -11,8 +11,7 @@ use std::time::Duration;
 use tokio::sync::{watch, Notify};
 use tokio::task::JoinHandle;
 
-pub const RELEASES_API_URL: &str =
-    "https://api.github.com/repos/Adyr27/quotaglass/releases/latest";
+pub const RELEASES_API_URL: &str = "https://api.github.com/repos/Adyr27/quotaglass/releases/latest";
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const USER_AGENT: &str = concat!("QuotaGlass/", env!("CARGO_PKG_VERSION"));
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -88,7 +87,12 @@ pub fn parse_release_tag(body: &[u8]) -> Option<String> {
         return None;
     }
     let _ = parse_semver(tag)?;
-    Some(tag.strip_prefix('v').or_else(|| tag.strip_prefix('V')).unwrap_or(tag).to_string())
+    Some(
+        tag.strip_prefix('v')
+            .or_else(|| tag.strip_prefix('V'))
+            .unwrap_or(tag)
+            .to_string(),
+    )
 }
 
 pub fn build_client() -> Result<reqwest::Client, reqwest::Error> {
@@ -116,7 +120,10 @@ pub async fn fetch_latest_from(
     if status.is_redirection() || !status.is_success() {
         return None;
     }
-    if resp.content_length().is_some_and(|n| n as usize > MAX_BODY_BYTES) {
+    if resp
+        .content_length()
+        .is_some_and(|n| n as usize > MAX_BODY_BYTES)
+    {
         return None;
     }
     let mut body = Vec::new();
@@ -249,7 +256,11 @@ mod tests {
         settle().await;
         tokio::time::advance(Duration::from_secs(3 * DAILY_SECS)).await;
         settle().await;
-        assert_eq!(calls.load(Ordering::SeqCst), 0, "opt-out makes zero requests");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "opt-out makes zero requests"
+        );
 
         on.store(true, Ordering::SeqCst);
         wake.notify_one();

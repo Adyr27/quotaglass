@@ -117,7 +117,11 @@ pub fn is_shell_class(class: &str) -> bool {
 }
 
 /// True when the foreground window exactly covers its monitor and is not a Windows shell host.
-pub fn covers_screen(window: (i32, i32, i32, i32), monitor: (i32, i32, i32, i32), class: &str) -> bool {
+pub fn covers_screen(
+    window: (i32, i32, i32, i32),
+    monitor: (i32, i32, i32, i32),
+    class: &str,
+) -> bool {
     window == monitor && !is_shell_class(class)
 }
 
@@ -212,8 +216,10 @@ pub fn capture_taskbar_anchor(
     let full_bottom = i64::from(primary.full.y) + i64::from(primary.full.height);
 
     let on_primary_x = pill_cx >= primary_left && pill_cx < primary_right;
-    let on_taskbar_strip =
-        on_primary_x && full_bottom > work_bottom && pill_cy >= work_bottom && pill_cy < full_bottom;
+    let on_taskbar_strip = on_primary_x
+        && full_bottom > work_bottom
+        && pill_cy >= work_bottom
+        && pill_cy < full_bottom;
 
     let anchor_mon = if on_taskbar_strip {
         primary
@@ -303,7 +309,10 @@ pub fn clamp_to_monitors(rect: WindowRect, monitors: &[MonitorRect]) -> WindowRe
     };
     let centre_x = i64::from(rect.x) + i64::from(rect.width) / 2;
     let centre_y = i64::from(rect.y) + i64::from(rect.height) / 2;
-    match monitors.iter().find(|m| contains_point(m, centre_x, centre_y)) {
+    match monitors
+        .iter()
+        .find(|m| contains_point(m, centre_x, centre_y))
+    {
         Some(m) => {
             let width = rect.width.min(m.width);
             let height = rect.height.min(m.height);
@@ -459,8 +468,7 @@ mod imp {
     type Hwnd = *mut c_void;
     type Hmonitor = *mut c_void;
     type Hkey = *mut c_void;
-    type SubclassProc =
-        unsafe extern "system" fn(Hwnd, u32, usize, isize, usize, usize) -> isize;
+    type SubclassProc = unsafe extern "system" fn(Hwnd, u32, usize, isize, usize, usize) -> isize;
     type MonitorEnumProc =
         unsafe extern "system" fn(Hmonitor, *mut c_void, *mut Rect, isize) -> i32;
 
@@ -539,15 +547,7 @@ mod imp {
             proc: MonitorEnumProc,
             data: isize,
         ) -> i32;
-        fn SetWindowPos(
-            h: Hwnd,
-            after: Hwnd,
-            x: i32,
-            y: i32,
-            cx: i32,
-            cy: i32,
-            flags: u32,
-        ) -> i32;
+        fn SetWindowPos(h: Hwnd, after: Hwnd, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
         fn ShowWindow(h: Hwnd, cmd: i32) -> i32;
         fn SetForegroundWindow(h: Hwnd) -> i32;
         fn IsWindowVisible(h: Hwnd) -> i32;
@@ -669,8 +669,7 @@ mod imp {
                 &mut cb,
             )
         };
-        (q == 0 && reg_type == REG_DWORD && cb == std::mem::size_of::<u32>() as u32)
-            .then_some(data)
+        (q == 0 && reg_type == REG_DWORD && cb == std::mem::size_of::<u32>() as u32).then_some(data)
     }
 
     fn to_hwnd(hwnd: HwndHandle) -> Hwnd {
@@ -859,7 +858,17 @@ mod imp {
         let cy = i32::try_from(rect.height).unwrap_or(i32::MAX);
         let flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
         // SAFETY: `hwnd` is a valid process HWND; updates device-pixel bounds without z-order/focus change.
-        unsafe { SetWindowPos(to_hwnd(hwnd), std::ptr::null_mut(), rect.x, rect.y, cx, cy, flags) != 0 }
+        unsafe {
+            SetWindowPos(
+                to_hwnd(hwnd),
+                std::ptr::null_mut(),
+                rect.x,
+                rect.y,
+                cx,
+                cy,
+                flags,
+            ) != 0
+        }
     }
 
     pub fn cursor_pos_px() -> Option<(i32, i32)> {
@@ -998,7 +1007,12 @@ mod imp {
         // SAFETY: `enum_monitor_proc` runs synchronously inside `EnumDisplayMonitors` while `monitors`
         // stays pinned on the stack and is never accessed concurrently.
         unsafe {
-            let _ = EnumDisplayMonitors(std::ptr::null_mut(), std::ptr::null(), enum_monitor_proc, ptr);
+            let _ = EnumDisplayMonitors(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                enum_monitor_proc,
+                ptr,
+            );
         }
         monitors.sort_by_key(|m| !m.primary);
         monitors
@@ -1067,7 +1081,15 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    fn mon(x: i32, y: i32, w: u32, h: u32, taskbar_h: u32, primary: bool, dpi: u32) -> DisplayMonitor {
+    fn mon(
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        taskbar_h: u32,
+        primary: bool,
+        dpi: u32,
+    ) -> DisplayMonitor {
         DisplayMonitor {
             full: MonitorRect {
                 x,
@@ -1123,7 +1145,10 @@ mod tests {
             classify_window_message(0x001A, 0),
             SubclassAction::Signal(DisplayEvent::WorkAreaChanged)
         );
-        assert_eq!(classify_window_message(0x001A, 123), SubclassAction::Forward);
+        assert_eq!(
+            classify_window_message(0x001A, 123),
+            SubclassAction::Forward
+        );
         assert_eq!(
             classify_window_message(0x0082, 0),
             SubclassAction::RemoveSubclass

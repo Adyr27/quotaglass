@@ -25,7 +25,10 @@ fn setting_row<'a>(
     note: Option<&'static str>,
     control: Element<'a, UiMessage>,
 ) -> Element<'a, UiMessage> {
-    let mut left = column![text(label).size(p::TEXT_BASE).color(tokens.semantic.text_primary)].spacing(2.0);
+    let mut left = column![text(label)
+        .size(p::TEXT_BASE)
+        .color(tokens.semantic.text_primary)]
+    .spacing(2.0);
     if let Some(note_text) = note {
         left = left.push(
             text(note_text)
@@ -64,7 +67,9 @@ pub fn view<'a>(
             container(
                 row![
                     icons::tinted_svg(icons::BACK_SVG, 14.0, t.semantic.text_primary),
-                    text("Back").size(p::TEXT_SM).font(ui_font(font::Weight::Medium)),
+                    text("Back")
+                        .size(p::TEXT_SM)
+                        .font(ui_font(font::Weight::Medium)),
                 ]
                 .spacing(5.0)
                 .align_y(Alignment::Center),

@@ -49,15 +49,21 @@ mod tests {
     #[test]
     fn stagger_spreads_accounts_evenly_across_base() {
         assert_eq!(
-            (0..2).map(|i| stagger_offset_secs(i, 2, 300)).collect::<Vec<_>>(),
+            (0..2)
+                .map(|i| stagger_offset_secs(i, 2, 300))
+                .collect::<Vec<_>>(),
             vec![0, 150]
         );
         assert_eq!(
-            (0..3).map(|i| stagger_offset_secs(i, 3, 300)).collect::<Vec<_>>(),
+            (0..3)
+                .map(|i| stagger_offset_secs(i, 3, 300))
+                .collect::<Vec<_>>(),
             vec![0, 100, 200]
         );
         assert_eq!(
-            (0..5).map(|i| stagger_offset_secs(i, 5, 300)).collect::<Vec<_>>(),
+            (0..5)
+                .map(|i| stagger_offset_secs(i, 5, 300))
+                .collect::<Vec<_>>(),
             vec![0, 60, 120, 180, 240]
         );
     }

@@ -147,8 +147,7 @@ pub fn build_ring_icon_rgba(size: u32) -> Vec<u8> {
                     // Rounded square background (#0c0d0f).
                     let dx = (px - half).abs() - (half - box_radius);
                     let dy = (py - half).abs() - (half - box_radius);
-                    let sdf_box =
-                        dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - box_radius;
+                    let sdf_box = dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - box_radius;
                     let mut sample = [0.0_f32; 4];
                     if sdf_box <= 0.0 {
                         sample = [12.0 / 255.0, 13.0 / 255.0, 15.0 / 255.0, 1.0];

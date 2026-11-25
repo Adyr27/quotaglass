@@ -230,8 +230,9 @@ impl AnimationState {
             }
         }
         self.bar_fills.retain(|k, _| active_bars.contains(k));
-        self.card_expands
-            .retain(|id, s| snapshot.accounts.iter().any(|a| &a.id == id) && (s.target > 0.0 || !s.settled()));
+        self.card_expands.retain(|id, s| {
+            snapshot.accounts.iter().any(|a| &a.id == id) && (s.target > 0.0 || !s.settled())
+        });
     }
 
     pub fn snap_all(&mut self) {
@@ -642,9 +643,9 @@ pub fn friendly_state_notice(account: &AccountView) -> Option<String> {
             Service::Antigravity => "Open Antigravity or T3 Code to refresh.".to_string(),
             _ => "Sign-in expired. Sign in again to refresh.".to_string(),
         }),
-        CardState::ProfileMissing => Some(
-            "This profile folder could not be found. Remove and add it again.".to_string(),
-        ),
+        CardState::ProfileMissing => {
+            Some("This profile folder could not be found. Remove and add it again.".to_string())
+        }
         CardState::NoReadingYet => {
             if account.profile_id.is_some() {
                 Some("Finish signing in inside the sign-in window.".to_string())
@@ -750,13 +751,15 @@ pub fn popover_logical_height(
                                 } else {
                                     0.0
                                 };
-                                let extra = if ui.rename.as_ref().is_some_and(|r| r.account_id == a.id) {
-                                    68.0
-                                } else if ui.confirm_remove_id.as_deref() == Some(a.id.as_str()) {
-                                    86.0
-                                } else {
-                                    44.0
-                                };
+                                let extra =
+                                    if ui.rename.as_ref().is_some_and(|r| r.account_id == a.id) {
+                                        68.0
+                                    } else if ui.confirm_remove_id.as_deref() == Some(a.id.as_str())
+                                    {
+                                        86.0
+                                    } else {
+                                        44.0
+                                    };
                                 let reset_extra = match a.service {
                                     Service::Codex => match a.banked_resets {
                                         Some(n) if n > 0 => 76.0,
@@ -777,7 +780,11 @@ pub fn popover_logical_height(
                 }
             };
             list_h = list_h.min(p::ACCOUNT_LIST_MAX_H);
-            let banner = if ui.problem_banner.is_some() { 48.0 } else { 0.0 };
+            let banner = if ui.problem_banner.is_some() {
+                48.0
+            } else {
+                0.0
+            };
             let add_picker = if ui.add_picker_open { 92.0 } else { 0.0 };
             let update = if settings.check_updates && update_version.is_some() {
                 48.0
@@ -787,7 +794,8 @@ pub fn popover_logical_height(
             let header = 74.0;
             let footer = 50.0;
             let outer_pad = 24.0;
-            (outer_pad + banner + header + list_h + add_picker + update + footer).clamp(230.0, 650.0)
+            (outer_pad + banner + header + list_h + add_picker + update + footer)
+                .clamp(230.0, 650.0)
         }
     }
 }
@@ -818,15 +826,11 @@ pub fn segmented_row<'a, T: Copy + PartialEq + 'a>(
         let active = val == selected;
         r = r.push(
             button(
-                container(
-                    text(label)
-                        .size(p::TEXT_SM)
-                        .font(ui_font(if active {
-                            font::Weight::Semibold
-                        } else {
-                            font::Weight::Normal
-                        })),
-                )
+                container(text(label).size(p::TEXT_SM).font(ui_font(if active {
+                    font::Weight::Semibold
+                } else {
+                    font::Weight::Normal
+                })))
                 .center_y(Length::Fill),
             )
             .padding([0.0, 10.0])
@@ -901,9 +905,15 @@ mod tests {
             (CardState::Error, Some("The service answered HTTP 403")),
             (CardState::Error, Some("ECONNREFUSED 127.0.0.1:4200")),
             (CardState::Error, Some("ETIMEDOUT connecting to host")),
-            (CardState::Error, Some("Unexpected data from the source (usage)")),
+            (
+                CardState::Error,
+                Some("Unexpected data from the source (usage)"),
+            ),
             (CardState::RateLimited, Some("HTTP 429 Too Many Requests")),
-            (CardState::RateLimited, Some("Rate limited. Retrying in 5 min.")),
+            (
+                CardState::RateLimited,
+                Some("Rate limited. Retrying in 5 min."),
+            ),
             (CardState::LoginExpired, Some("HTTP 401")),
             (CardState::NoSource, Some("Not found")),
             (CardState::ProfileMissing, Some("missing")),
@@ -918,8 +928,14 @@ mod tests {
             assert!(!lower.contains("502"), "leaked 502 in '{notice}'");
             assert!(!lower.contains("401"), "leaked 401 in '{notice}'");
             assert!(!lower.contains("403"), "leaked 403 in '{notice}'");
-            assert!(!lower.contains("econnrefused"), "leaked ECONNREFUSED in '{notice}'");
-            assert!(!lower.contains("etimedout"), "leaked ETIMEDOUT in '{notice}'");
+            assert!(
+                !lower.contains("econnrefused"),
+                "leaked ECONNREFUSED in '{notice}'"
+            );
+            assert!(
+                !lower.contains("etimedout"),
+                "leaked ETIMEDOUT in '{notice}'"
+            );
         }
     }
 
@@ -930,7 +946,8 @@ mod tests {
             sample_account("x1", Service::Codex, "Personal", CardState::Ok, None, None),
             sample_account("a1", Service::Antigravity, "IDE", CardState::Ok, None, None),
             {
-                let mut h = sample_account("c2", Service::Claude, "Hidden", CardState::Ok, None, None);
+                let mut h =
+                    sample_account("c2", Service::Claude, "Hidden", CardState::Ok, None, None);
                 h.hidden = true;
                 h
             },
@@ -941,14 +958,20 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(visible_accounts_for_tab(&accounts, ProviderTab::All).len(), 3);
+        assert_eq!(
+            visible_accounts_for_tab(&accounts, ProviderTab::All).len(),
+            3
+        );
 
         select_tab_and_persist(&mut settings, &mut ui, ProviderTab::Codex, &accounts);
         assert_eq!(settings.active_tab, ProviderTab::Codex);
         let codex = visible_accounts_for_tab(&accounts, settings.active_tab);
         assert_eq!(codex.len(), 1);
         assert_eq!(codex[0].service, Service::Codex);
-        assert_eq!(ui.expanded_id, None, "expanded card outside new tab collapses");
+        assert_eq!(
+            ui.expanded_id, None,
+            "expanded card outside new tab collapses"
+        );
 
         select_tab_and_persist(&mut settings, &mut ui, ProviderTab::Antigravity, &accounts);
         assert_eq!(settings.active_tab, ProviderTab::Antigravity);
@@ -958,7 +981,10 @@ mod tests {
         );
 
         select_tab_and_persist(&mut settings, &mut ui, ProviderTab::Claude, &accounts);
-        assert_eq!(visible_accounts_for_tab(&accounts, settings.active_tab).len(), 1);
+        assert_eq!(
+            visible_accounts_for_tab(&accounts, settings.active_tab).len(),
+            1
+        );
     }
 
     #[test]

@@ -29,11 +29,7 @@ impl JsonStore {
 
     /// `%APPDATA%\QuotaGlass\<name>`, or `None` when `APPDATA` is unset, relative, or `name` is unsafe.
     pub fn in_appdata(name: &str) -> Option<PathBuf> {
-        if name.is_empty()
-            || name == "."
-            || name == ".."
-            || name.contains(['/', '\\', '\0'])
-        {
+        if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
             return None;
         }
         let appdata = PathBuf::from(std::env::var_os("APPDATA")?);

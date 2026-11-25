@@ -41,7 +41,11 @@ pub fn check(snapshot: &Snapshot, state: &mut WarnState) -> Vec<Alert> {
     check_at(snapshot, state, warnings::local_offset_secs())
 }
 
-pub fn check_at(snapshot: &Snapshot, state: &mut WarnState, offset_secs: Option<i32>) -> Vec<Alert> {
+pub fn check_at(
+    snapshot: &Snapshot,
+    state: &mut WarnState,
+    offset_secs: Option<i32>,
+) -> Vec<Alert> {
     if snapshot.accounts.is_empty() {
         return Vec::new();
     }

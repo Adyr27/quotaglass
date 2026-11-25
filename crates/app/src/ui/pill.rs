@@ -224,7 +224,11 @@ fn render_empty_slot<'a>(
 }
 
 /// Computes horizontal center anchor (in physical px relative to pill left) for the clicked slot.
-pub fn slot_anchor_x_px(services: &[ServiceView], target: Option<Service>, pill_width_px: u32) -> i32 {
+pub fn slot_anchor_x_px(
+    services: &[ServiceView],
+    target: Option<Service>,
+    pill_width_px: u32,
+) -> i32 {
     let count = services.len().max(1);
     let idx = target
         .and_then(|svc| services.iter().position(|s| s.service == svc))
@@ -232,8 +236,10 @@ pub fn slot_anchor_x_px(services: &[ServiceView], target: Option<Service>, pill_
     if count <= 1 {
         return (pill_width_px / 2) as i32;
     }
-    let total_units = (PILL_PAD * 2 + count as u32 * PILL_SLOT + (count as u32 - 1) * PILL_GAP) as f64;
-    let center_unit = PILL_PAD as f64 + idx as f64 * (PILL_SLOT + PILL_GAP) as f64 + PILL_SLOT as f64 * 0.5;
+    let total_units =
+        (PILL_PAD * 2 + count as u32 * PILL_SLOT + (count as u32 - 1) * PILL_GAP) as f64;
+    let center_unit =
+        PILL_PAD as f64 + idx as f64 * (PILL_SLOT + PILL_GAP) as f64 + PILL_SLOT as f64 * 0.5;
     ((center_unit / total_units) * f64::from(pill_width_px)).round() as i32
 }
 

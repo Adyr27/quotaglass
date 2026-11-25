@@ -477,7 +477,11 @@ mod tests {
             v
         };
         let cases: [(Service, CliAction, Vec<OsString>); 6] = [
-            (Service::Claude, CliAction::Login, console(&["auth", "login"])),
+            (
+                Service::Claude,
+                CliAction::Login,
+                console(&["auth", "login"]),
+            ),
             (Service::Claude, CliAction::Open, console(&[])),
             (Service::Claude, CliAction::Logout, os(&["auth", "logout"])),
             (Service::Codex, CliAction::Login, console(&["login"])),
@@ -676,7 +680,10 @@ mod tests {
         };
         assert!(removal_target("claude:a", &[card], &added, &root).is_err());
         let r1 = removal_target("p1", &[], &added, &root).unwrap();
-        assert_eq!(r1.folder, ProfileFolder::Delete(inside.canonicalize().unwrap()));
+        assert_eq!(
+            r1.folder,
+            ProfileFolder::Delete(inside.canonicalize().unwrap())
+        );
         let r2 = removal_target("p2", &[], &added, &root).unwrap();
         assert_eq!(r2.folder, ProfileFolder::Outside);
 

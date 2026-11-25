@@ -181,8 +181,12 @@ impl App {
         let snapshot_cache = SnapshotCache::in_appdata();
         let warnings = JsonStore::in_appdata("warnings.json")
             .map(|p| Arc::new(Warnings::new(JsonStore::new(p))));
-        let resets = JsonStore::in_appdata("resets.json")
-            .map(|p| Arc::new(Resets::new(JsonStore::new(p), settings.reset_toasts.clone())));
+        let resets = JsonStore::in_appdata("resets.json").map(|p| {
+            Arc::new(Resets::new(
+                JsonStore::new(p),
+                settings.reset_toasts.clone(),
+            ))
+        });
 
         let mut ui = UiState::default();
         let mut snapshot = Snapshot {
@@ -481,7 +485,10 @@ impl App {
         self.save_settings();
         window::resize(
             self.pill_id,
-            Size::new((fitted.width as f64 / zoom) as f32, (fitted.height as f64 / zoom) as f32),
+            Size::new(
+                (fitted.width as f64 / zoom) as f32,
+                (fitted.height as f64 / zoom) as f32,
+            ),
         )
     }
 
@@ -504,7 +511,10 @@ impl App {
         self.settings.pill_position = Some(rect);
         let resize_pill = window::resize(
             self.pill_id,
-            Size::new((rect.width as f64 / zoom) as f32, (rect.height as f64 / zoom) as f32),
+            Size::new(
+                (rect.width as f64 / zoom) as f32,
+                (rect.height as f64 / zoom) as f32,
+            ),
         );
         if self.popover_visible {
             Task::batch([resize_pill, self.sync_popover_bounds()])
@@ -539,7 +549,11 @@ impl App {
         );
         let pop_w_px = (f64::from(pop_w_logical) * zoom).round() as u32;
         let pop_h_px = (f64::from(pop_h_logical) * zoom).round() as u32;
-        let anchor_x = pill::slot_anchor_x_px(&self.snapshot.services, self.anchor_service, pill_rect.width);
+        let anchor_x = pill::slot_anchor_x_px(
+            &self.snapshot.services,
+            self.anchor_service,
+            pill_rect.width,
+        );
         let (pop_rect, _) = win32::flyout_rect(pill_rect, anchor_x, pop_w_px, pop_h_px, work, zoom);
         if let Some(h) = self.popover_hwnd {
             win32::move_and_resize_px(h, pop_rect);
@@ -560,7 +574,12 @@ impl App {
         }
         if let Some(svc) = service {
             let tab = tab_for_service(Some(svc));
-            select_tab_and_persist(&mut self.settings, &mut self.ui, tab, &self.snapshot.accounts);
+            select_tab_and_persist(
+                &mut self.settings,
+                &mut self.ui,
+                tab,
+                &self.snapshot.accounts,
+            );
             self.save_settings();
         }
         if let Some(sched) = &self.scheduler {
@@ -695,13 +714,13 @@ impl App {
                     if let Some((cx, _)) = win32::cursor_pos_px() {
                         let next_scale = clamp_scale(
                             drag.start_scale
-                                * (f64::from(drag.start_width_px) + f64::from(cx - drag.start_x_px))
+                                * (f64::from(drag.start_width_px)
+                                    + f64::from(cx - drag.start_x_px))
                                 / f64::from(drag.start_width_px.max(1)),
                         );
                         if (next_scale - self.settings.pill_scale).abs() > 0.005 {
                             self.settings.pill_scale = next_scale;
-                            let (nw, nh) =
-                                win32::pill_px_size(drag.slots, next_scale, drag.zoom);
+                            let (nw, nh) = win32::pill_px_size(drag.slots, next_scale, drag.zoom);
                             let next_rect = win32::resized_pill_rect(
                                 drag.start_left_x,
                                 drag.start_center_y,
@@ -887,8 +906,12 @@ impl App {
                     self.capture_anchor_and_save();
                 }
                 let busy = win32::fullscreen_busy();
-                match win32::next_visibility(busy, self.auto_hidden, self.user_hidden, self.pill_visible)
-                {
+                match win32::next_visibility(
+                    busy,
+                    self.auto_hidden,
+                    self.user_hidden,
+                    self.pill_visible,
+                ) {
                     FullscreenAction::Hide => {
                         self.auto_hidden = true;
                         self.hide_pill();
@@ -919,7 +942,12 @@ impl App {
                 self.ui.pending.adding_service = None;
                 match result {
                     Ok(account) => {
-                        if !self.settings.added_accounts.iter().any(|a| a.id == account.id) {
+                        if !self
+                            .settings
+                            .added_accounts
+                            .iter()
+                            .any(|a| a.id == account.id)
+                        {
                             self.settings.added_accounts.push(account);
                         }
                         self.ui.add_picker_open = false;
@@ -948,7 +976,8 @@ impl App {
                 self.ui.confirm_remove_id = None;
                 match result {
                     Ok(()) => {
-                        self.settings.forget_added(&profile_id, &account_id, forget_card);
+                        self.settings
+                            .forget_added(&profile_id, &account_id, forget_card);
                         if self.ui.expanded_id.as_deref() == Some(account_id.as_str()) {
                             self.ui.expanded_id = None;
                         }
@@ -1018,8 +1047,7 @@ impl App {
                     return Task::none();
                 }
                 let target_tab = tab_for_service(svc);
-                if self.popover_visible
-                    && (svc.is_none() || self.settings.active_tab == target_tab)
+                if self.popover_visible && (svc.is_none() || self.settings.active_tab == target_tab)
                 {
                     self.hide_popover();
                     return Task::none();
@@ -1102,16 +1130,14 @@ impl App {
                 self.ui.update_rename_draft(text);
                 Task::none()
             }
-            UiMessage::SubmitRename => {
-                match self.ui.commit_rename(&mut self.settings) {
-                    Ok(true) => {
-                        self.apply_settings_to_runtime();
-                        self.sync_popover_bounds()
-                    }
-                    Ok(false) => Task::none(),
-                    Err(_) => self.sync_popover_bounds(),
+            UiMessage::SubmitRename => match self.ui.commit_rename(&mut self.settings) {
+                Ok(true) => {
+                    self.apply_settings_to_runtime();
+                    self.sync_popover_bounds()
                 }
-            }
+                Ok(false) => Task::none(),
+                Err(_) => self.sync_popover_bounds(),
+            },
             UiMessage::CancelRename => {
                 self.ui.cancel_rename();
                 self.sync_popover_bounds()
@@ -1137,7 +1163,8 @@ impl App {
                     return Task::none();
                 }
                 let Some(root) = connect::profiles_root() else {
-                    self.ui.problem_banner = Some("Could not locate the QuotaGlass profiles folder.".into());
+                    self.ui.problem_banner =
+                        Some("Could not locate the QuotaGlass profiles folder.".into());
                     return Task::none();
                 };
                 let removal = match connect::removal_target(
@@ -1166,7 +1193,8 @@ impl App {
                         let res = tokio::task::spawn_blocking(move || -> Result<(), String> {
                             if let Some(t) = tool {
                                 let profile = connect::plain(&removal.account.profile_dir);
-                                let _ = connect::logout(removal.account.service, Some(&t), &profile);
+                                let _ =
+                                    connect::logout(removal.account.service, Some(&t), &profile);
                             }
                             connect::delete_profile(&root, &removal.account.profile_dir)
                                 .map_err(str::to_string)
@@ -1238,7 +1266,8 @@ impl App {
                     return Task::none();
                 }
                 let Some(root) = connect::profiles_root() else {
-                    self.ui.problem_banner = Some("Could not locate the QuotaGlass profiles folder.".into());
+                    self.ui.problem_banner =
+                        Some("Could not locate the QuotaGlass profiles folder.".into());
                     return Task::none();
                 };
                 let tool = self
@@ -1448,8 +1477,8 @@ impl App {
         ];
 
         let shimmer = self.popover_visible && self.ui.is_skeleton_loading(&self.snapshot);
-        let pulse = self.pill_visible
-            && (self.ui.pending.refreshing || self.has_rate_limited_service());
+        let pulse =
+            self.pill_visible && (self.ui.pending.refreshing || self.has_rate_limited_service());
         let animating = self.ui.animations.is_animating(
             self.animations_enabled,
             self.pill_visible,
@@ -1560,7 +1589,11 @@ fn win32_platform_specific() -> PlatformSpecific {
 }
 
 fn clamp_popover_height_to_work(raw_logical_h: f32, work: MonitorRect, zoom: f64) -> f32 {
-    let z = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    let z = if zoom.is_finite() && zoom > 0.0 {
+        zoom
+    } else {
+        1.0
+    };
     let max_logical = ((f64::from(work.height) / z) - 24.0).max(240.0) as f32;
     raw_logical_h.min(max_logical).max(220.0)
 }
@@ -1588,11 +1621,7 @@ fn monitor_for_rect(rect: WindowRect, monitors: &[DisplayMonitor]) -> Option<&Di
         .or_else(|| monitors.first())
 }
 
-fn resolve_pill_rect(
-    settings: &Settings,
-    slots: u32,
-    monitors: &[DisplayMonitor],
-) -> WindowRect {
+fn resolve_pill_rect(settings: &Settings, slots: u32, monitors: &[DisplayMonitor]) -> WindowRect {
     let zoom = primary_zoom(monitors);
     let px_size = win32::pill_px_size(slots, settings.pill_scale, zoom);
     let sig = win32::topology_signature(monitors);
@@ -1781,9 +1810,16 @@ mod tests {
             pill_locked: true,
             ..Settings::default()
         };
-        let (sig, anchor) =
-            win32::capture_taskbar_anchor(WindowRect { x: 2200, y: 1388, width: 156, height: 48 }, &external)
-                .unwrap();
+        let (sig, anchor) = win32::capture_taskbar_anchor(
+            WindowRect {
+                x: 2200,
+                y: 1388,
+                width: 156,
+                height: 48,
+            },
+            &external,
+        )
+        .unwrap();
         settings.set_taskbar_anchor(sig, anchor);
 
         let rect = resolve_pill_rect(&settings, 3, &laptop);
@@ -1808,12 +1844,24 @@ mod tests {
         app.popover_visible = true;
         app.popover_opened_at = Some(Instant::now());
 
-        let _ = app.update(Message::WindowEvent(app.popover_id, window::Event::Unfocused));
-        assert!(app.popover_visible, "within 150ms grace window must stay open");
+        let _ = app.update(Message::WindowEvent(
+            app.popover_id,
+            window::Event::Unfocused,
+        ));
+        assert!(
+            app.popover_visible,
+            "within 150ms grace window must stay open"
+        );
 
         app.popover_opened_at = Some(Instant::now() - Duration::from_millis(200));
-        let _ = app.update(Message::WindowEvent(app.popover_id, window::Event::Unfocused));
-        assert!(!app.popover_visible, "outside grace window must hide cleanly");
+        let _ = app.update(Message::WindowEvent(
+            app.popover_id,
+            window::Event::Unfocused,
+        ));
+        assert!(
+            !app.popover_visible,
+            "outside grace window must hide cleanly"
+        );
     }
 
     #[test]
@@ -1849,7 +1897,9 @@ mod tests {
             },
         });
         let _ = app.update(Message::MouseReleaseOnWindow(app.pill_id));
-        let _ = app.update(Message::Ui(UiMessage::PillSlotReleased(Some(Service::Claude))));
+        let _ = app.update(Message::Ui(UiMessage::PillSlotReleased(Some(
+            Service::Claude,
+        ))));
         assert!(
             !app.popover_visible,
             "releasing a resize grip must not open the popover"
@@ -1861,7 +1911,9 @@ mod tests {
             dragged: true,
         });
         let _ = app.update(Message::MouseReleaseOnWindow(app.pill_id));
-        let _ = app.update(Message::Ui(UiMessage::PillSlotReleased(Some(Service::Claude))));
+        let _ = app.update(Message::Ui(UiMessage::PillSlotReleased(Some(
+            Service::Claude,
+        ))));
         assert!(
             !app.popover_visible,
             "releasing a dragged pill must not open the popover"
@@ -1874,8 +1926,13 @@ mod tests {
             dragged: false,
         });
         let _ = app.update(Message::MouseReleaseOnWindow(app.pill_id));
-        let _ = app.update(Message::Ui(UiMessage::PillSlotReleased(Some(Service::Claude))));
-        assert!(app.popover_visible, "plain click on pill must open the popover");
+        let _ = app.update(Message::Ui(UiMessage::PillSlotReleased(Some(
+            Service::Claude,
+        ))));
+        assert!(
+            app.popover_visible,
+            "plain click on pill must open the popover"
+        );
     }
 
     #[test]
@@ -1907,12 +1964,16 @@ mod tests {
             width: 1920,
             height: 1040,
         };
-        assert_eq!(clamp_popover_height_to_work(580.0, desktop_work, 1.0), 580.0);
+        assert_eq!(
+            clamp_popover_height_to_work(580.0, desktop_work, 1.0),
+            580.0
+        );
 
         // Verify flyout placement across narrow (360), target (412), and wide (440) widths.
         let pill = win32::default_pill_rect(desktop_work, win32::pill_px_size(3, 1.0, 1.0), 1.0);
         for w in [360u32, 412u32, 440u32] {
-            let (pop, up) = win32::flyout_rect(pill, (pill.width / 2) as i32, w, 580, desktop_work, 1.0);
+            let (pop, up) =
+                win32::flyout_rect(pill, (pill.width / 2) as i32, w, 580, desktop_work, 1.0);
             assert!(up);
             assert_eq!(pop.width, w);
             assert!(pop.x >= desktop_work.x);

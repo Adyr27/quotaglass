@@ -23,22 +23,22 @@ const TABS: [ProviderTab; 4] = [
     ProviderTab::Antigravity,
 ];
 
-fn top_bar<'a>(
-    tokens: &DesignTokens,
-    ui: &UiState,
-    settings: &Settings,
-) -> Element<'a, UiMessage> {
+fn top_bar<'a>(tokens: &DesignTokens, ui: &UiState, settings: &Settings) -> Element<'a, UiMessage> {
     let t = *tokens;
     let mut tab_row = row![].spacing(4.0).align_y(Alignment::Center);
     for tab in TABS {
         let active = settings.active_tab == tab;
         tab_row = tab_row.push(
             button(
-                container(text(tab_label(tab)).size(p::TEXT_SM).font(ui_font(if active {
-                    font::Weight::Semibold
-                } else {
-                    font::Weight::Normal
-                })))
+                container(
+                    text(tab_label(tab))
+                        .size(p::TEXT_SM)
+                        .font(ui_font(if active {
+                            font::Weight::Semibold
+                        } else {
+                            font::Weight::Normal
+                        })),
+                )
                 .center_y(Length::Fill),
             )
             .padding([0.0, 9.0])
@@ -118,7 +118,10 @@ fn list_page<'a>(
     let status_text = if !ui.pending.can_refresh() {
         "Refreshing...".to_string()
     } else if ui.has_snapshot && snapshot.generated_at_ms > 0 {
-        format!("Updated {}", format_updated_ago(now_ms, snapshot.generated_at_ms))
+        format!(
+            "Updated {}",
+            format_updated_ago(now_ms, snapshot.generated_at_ms)
+        )
     } else {
         "Ready".to_string()
     };
@@ -131,9 +134,13 @@ fn list_page<'a>(
 
     root = root.push(
         row![
-            text(status_text).size(p::TEXT_XS).color(t.semantic.text_muted),
+            text(status_text)
+                .size(p::TEXT_XS)
+                .color(t.semantic.text_muted),
             space::horizontal(),
-            text(count_text).size(p::TEXT_XS).color(t.semantic.text_muted),
+            text(count_text)
+                .size(p::TEXT_XS)
+                .color(t.semantic.text_muted),
         ]
         .align_y(Alignment::Center),
     );
@@ -252,15 +259,15 @@ fn list_page<'a>(
 
     // Footer actions.
     let can_add = ui.pending.can_add();
-    let pin_label = if settings.pill_locked {
-        "Unpin"
-    } else {
-        "Pin"
-    };
+    let pin_label = if settings.pill_locked { "Unpin" } else { "Pin" };
     let footer = row![
         button(
-            container(text("+ Add account").size(p::TEXT_SM).font(ui_font(font::Weight::Medium)))
-                .center_y(Length::Fill),
+            container(
+                text("+ Add account")
+                    .size(p::TEXT_SM)
+                    .font(ui_font(font::Weight::Medium))
+            )
+            .center_y(Length::Fill),
         )
         .padding([0.0, 10.0])
         .height(Length::Fixed(36.0))

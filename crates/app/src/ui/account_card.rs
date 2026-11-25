@@ -6,7 +6,7 @@ use crate::ui::icons;
 use crate::ui::tokens::{primitives as p, ui_font, DesignTokens};
 use crate::ui::{
     forecast_line, friendly_state_notice, resets_chip_text, sentence_case,
-    sign_in_button_label, used_whole, UiMessage, UiState,
+    sign_in_button_label, status_dot, used_whole, UiMessage, UiState,
 };
 use iced::border;
 use iced::font;
@@ -176,6 +176,24 @@ fn chip<'a>(
         .into()
 }
 
+fn burn_chip<'a>(tokens: &DesignTokens) -> Element<'a, UiMessage> {
+    let t = *tokens;
+    container(
+        row![
+            status_dot(t.semantic.danger),
+            text("fast burn")
+                .size(p::TEXT_XS)
+                .font(ui_font(font::Weight::Medium))
+                .color(t.semantic.burn_ink),
+        ]
+        .spacing(5.0)
+        .align_y(Alignment::Center),
+    )
+    .padding([2.0, 8.0])
+    .style(move |_| t.burn_chip_style())
+    .into()
+}
+
 pub fn skeleton_card<'a>(tokens: &DesignTokens, phase: f32) -> Element<'a, UiMessage> {
     let t = *tokens;
     let bar = |w: Length, h: f32| {
@@ -310,12 +328,7 @@ pub fn view<'a>(
             }
             meta = meta.push(space::horizontal());
             if b.fast_burn {
-                meta = meta.push(chip(
-                    "fast burn".to_string(),
-                    move |_| t.burn_chip_style(),
-                    p::TEXT_XS,
-                    font::Weight::Semibold,
-                ));
+                meta = meta.push(burn_chip(&t));
             }
             header_col = header_col.push(meta);
         }
@@ -356,12 +369,7 @@ pub fn view<'a>(
                 .align_y(Alignment::Center);
                 foot = foot.push(space::horizontal());
                 if b.fast_burn {
-                    foot = foot.push(chip(
-                        "fast burn".to_string(),
-                        move |_| t.burn_chip_style(),
-                        p::TEXT_XS,
-                        font::Weight::Semibold,
-                    ));
+                    foot = foot.push(burn_chip(&t));
                 }
 
                 buckets_col = buckets_col.push(

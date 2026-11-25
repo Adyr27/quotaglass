@@ -7,7 +7,7 @@ use crate::settings::{ProviderTab, Settings};
 use crate::state::format_updated_ago;
 use crate::ui::tokens::{primitives as p, ui_font, DesignTokens};
 use crate::ui::{
-    account_card, faq, icons, onboarding, settings as settings_view, tab_label,
+    account_card, faq, icons, onboarding, settings as settings_view, status_dot, tab_label,
     visible_accounts_for_tab, Page, UiMessage, UiState,
 };
 use iced::font;
@@ -95,9 +95,10 @@ fn list_page<'a>(
         root = root.push(
             container(
                 row![
+                    status_dot(t.semantic.danger),
                     text(problem.clone())
                         .size(p::TEXT_SM)
-                        .color(t.semantic.danger)
+                        .color(t.semantic.text_primary)
                         .width(Length::Fill),
                     button(text("Dismiss").size(p::TEXT_XS))
                         .padding([3.0, 8.0])

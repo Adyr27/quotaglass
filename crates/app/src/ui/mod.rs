@@ -12,9 +12,10 @@ pub mod tokens;
 use crate::connect::UrlTarget;
 use crate::settings::{Connection, GlassMode, ProviderTab, Settings, Theme, ToastSound};
 use crate::ui::tokens::{primitives as p, ui_font, DesignTokens};
+use iced::border;
 use iced::font;
-use iced::widget::{button, container, row, text};
-use iced::{Element, Length};
+use iced::widget::{button, container, row, space, text};
+use iced::{Background, Color, Element, Length};
 use quotaglass_core::view::{AccountView, CardState, Freshness, Snapshot};
 use quotaglass_core::Service;
 use std::collections::BTreeMap;
@@ -789,6 +790,20 @@ pub fn popover_logical_height(
             (outer_pad + banner + header + list_h + add_picker + update + footer).clamp(230.0, 650.0)
         }
     }
+}
+
+/// Shared 6px circular status dot used by fast-burn chips and problem banners.
+pub fn status_dot<'a>(color: Color) -> Element<'a, UiMessage> {
+    container(space().width(Length::Fixed(6.0)).height(Length::Fixed(6.0)))
+        .style(move |_| container::Style {
+            background: Some(Background::Color(color)),
+            border: border::Border {
+                radius: border::radius(p::CHIP_RADIUS),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 /// Shared segmented option pill row used across Settings.

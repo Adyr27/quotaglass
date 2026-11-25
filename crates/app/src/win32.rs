@@ -437,6 +437,19 @@ pub fn flyout_rect(
     (fit_in(r, work), up)
 }
 
+/// Calibrated Windows 11 DWM Acrylic tint `(R, G, B, A)` for all 6 Theme x GlassMode pairs.
+/// Shared as the single source of truth between [`apply_glass`] and UI contrast verification.
+pub const fn glass_tint(mode: GlassMode, dark: bool) -> (u8, u8, u8, u8) {
+    match (mode, dark) {
+        (GlassMode::Clear, true) => (16, 17, 21, 78),
+        (GlassMode::Clear, false) => (248, 249, 252, 68),
+        (GlassMode::LiquidGlass, true) => (18, 19, 23, 140),
+        (GlassMode::LiquidGlass, false) => (244, 246, 250, 128),
+        (GlassMode::Frosted, true) => (20, 21, 25, 184),
+        (GlassMode::Frosted, false) => (246, 246, 244, 184),
+    }
+}
+
 #[cfg(windows)]
 mod imp {
     use super::*;
@@ -691,14 +704,7 @@ mod imp {
         set_immersive_dark_mode(hwnd, dark);
         // Never call `apply_blur` (`ACCENT_ENABLE_BLURBEHIND`): it blacks out Light mode on Win11
         // transparent wgpu windows. Calibrated `apply_acrylic` works reliably across all 3 modes.
-        let tint = match (mode, dark) {
-            (GlassMode::Clear, true) => (14, 17, 22, 42),
-            (GlassMode::Clear, false) => (248, 250, 255, 52),
-            (GlassMode::LiquidGlass, true) => (18, 22, 30, 140),
-            (GlassMode::LiquidGlass, false) => (244, 248, 255, 150),
-            (GlassMode::Frosted, true) => (20, 22, 28, 210),
-            (GlassMode::Frosted, false) => (246, 246, 244, 215),
-        };
+        let tint = super::glass_tint(mode, dark);
         window_vibrancy::apply_acrylic(hwnd, Some(tint)).is_ok()
     }
 

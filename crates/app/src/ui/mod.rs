@@ -11,10 +11,10 @@ pub mod tokens;
 
 use crate::connect::UrlTarget;
 use crate::settings::{Connection, GlassMode, ProviderTab, Settings, Theme, ToastSound};
-use crate::ui::tokens::{primitives as p, DesignTokens};
+use crate::ui::tokens::{primitives as p, ui_font, DesignTokens};
 use iced::font;
-use iced::widget::{button, row, text};
-use iced::{Element, Font, Length};
+use iced::widget::{button, container, row, text};
+use iced::{Element, Length};
 use quotaglass_core::view::{AccountView, CardState, Freshness, Snapshot};
 use quotaglass_core::Service;
 use std::collections::BTreeMap;
@@ -722,65 +722,71 @@ pub fn popover_logical_height(
     update_version: Option<&str>,
 ) -> f32 {
     match ui.page {
-        Page::Onboarding => 332.0,
-        Page::Faq => 468.0,
-        Page::Settings => 500.0,
+        Page::Onboarding => 396.0,
+        Page::Faq => 520.0,
+        Page::Settings => 580.0,
         Page::List => {
             let mut list_h = if ui.is_skeleton_loading(snapshot) {
-                180.0
+                206.0
             } else {
                 let visible = visible_accounts_for_tab(&snapshot.accounts, settings.active_tab);
                 if visible.is_empty() {
-                    92.0
+                    98.0
                 } else {
                     visible
                         .iter()
                         .map(|a| {
                             let is_exp = ui.expanded_id.as_deref() == Some(a.id.as_str());
-                            if is_exp {
-                                let buckets = (a.buckets.len().max(1) as f32) * 44.0;
-                                let extra = if ui.rename.as_ref().is_some_and(|r| r.account_id == a.id) {
-                                    64.0
-                                } else if ui.confirm_remove_id.as_deref() == Some(a.id.as_str()) {
-                                    68.0
-                                } else {
-                                    0.0
-                                };
-                                let reset_extra = if (a.service == Service::Codex
-                                    && a.banked_resets.is_some())
-                                    || a.service == Service::Claude
-                                {
-                                    44.0
-                                } else {
-                                    0.0
-                                };
-                                98.0 + buckets + reset_extra + extra
+                            let notice_h = if friendly_state_notice(a).is_some() {
+                                24.0
                             } else {
-                                let notice = if friendly_state_notice(a).is_some() {
-                                    20.0
+                                0.0
+                            };
+                            if is_exp {
+                                let buckets = (a.buckets.len().max(1) as f32) * 52.0;
+                                let forecast_h = if forecast_line(a.forecast_mins).is_some() {
+                                    26.0
                                 } else {
                                     0.0
                                 };
-                                84.0 + notice
+                                let extra = if ui.rename.as_ref().is_some_and(|r| r.account_id == a.id) {
+                                    68.0
+                                } else if ui.confirm_remove_id.as_deref() == Some(a.id.as_str()) {
+                                    86.0
+                                } else {
+                                    44.0
+                                };
+                                let reset_extra = match a.service {
+                                    Service::Codex => match a.banked_resets {
+                                        Some(n) if n > 0 => 76.0,
+                                        Some(_) => 44.0,
+                                        None => 0.0,
+                                    },
+                                    Service::Claude => 46.0,
+                                    Service::Antigravity => 0.0,
+                                };
+                                84.0 + notice_h + buckets + forecast_h + reset_extra + extra
+                            } else {
+                                92.0 + notice_h
                             }
                         })
                         .sum::<f32>()
-                        + (visible.len().saturating_sub(1) as f32 * 8.0)
-                        + 6.0
+                        + (visible.len().saturating_sub(1) as f32 * 10.0)
+                        + 10.0
                 }
             };
             list_h = list_h.min(p::ACCOUNT_LIST_MAX_H);
-            let banner = if ui.problem_banner.is_some() { 42.0 } else { 0.0 };
-            let add_picker = if ui.add_picker_open { 78.0 } else { 0.0 };
+            let banner = if ui.problem_banner.is_some() { 48.0 } else { 0.0 };
+            let add_picker = if ui.add_picker_open { 92.0 } else { 0.0 };
             let update = if settings.check_updates && update_version.is_some() {
-                44.0
+                48.0
             } else {
                 0.0
             };
-            let header = 66.0;
-            let footer = 46.0;
+            let header = 74.0;
+            let footer = 50.0;
             let outer_pad = 24.0;
-            (outer_pad + banner + header + list_h + add_picker + update + footer).clamp(210.0, 620.0)
+            (outer_pad + banner + header + list_h + add_picker + update + footer).clamp(230.0, 650.0)
         }
     }
 }
@@ -796,17 +802,21 @@ pub fn segmented_row<'a, T: Copy + PartialEq + 'a>(
     for &(val, label) in choices {
         let active = val == selected;
         r = r.push(
-            button(text(label).size(p::TEXT_SM).font(Font {
-                weight: if active {
-                    font::Weight::Semibold
-                } else {
-                    font::Weight::Normal
-                },
-                ..Font::DEFAULT
-            }))
-            .padding([6.0, 10.0])
-            .height(Length::Fixed(30.0))
-            .style(move |_, status| tokens.quiet_button_style(active, status))
+            button(
+                container(
+                    text(label)
+                        .size(p::TEXT_SM)
+                        .font(ui_font(if active {
+                            font::Weight::Semibold
+                        } else {
+                            font::Weight::Normal
+                        })),
+                )
+                .center_y(Length::Fill),
+            )
+            .padding([0.0, 10.0])
+            .height(Length::Fixed(36.0))
+            .style(move |_, status| tokens.segmented_button_style(active, status))
             .on_press(on_pick(val)),
         );
     }
@@ -1074,5 +1084,54 @@ mod tests {
         assert_eq!(resets_chip_text(0), "No resets");
         assert_eq!(resets_chip_text(1), "1 reset");
         assert_eq!(resets_chip_text(2), "2 resets");
+    }
+
+    #[test]
+    fn popover_height_accounts_for_expanded_buckets_notices_and_forecasts() {
+        let mut antigravity = sample_account(
+            "ag-1",
+            Service::Antigravity,
+            "Antigravity",
+            CardState::Ok,
+            None,
+            None,
+        );
+        antigravity.buckets = vec![
+            sample_bucket("Gemini Weekly", 49.0, true),
+            sample_bucket("Gemini 5-hour", 96.0, true),
+            sample_bucket("Claude Weekly", 99.0, false),
+            sample_bucket("Claude 5-hour", 0.0, false),
+        ];
+        antigravity.forecast_mins = Some(5);
+
+        let mut claude = sample_account(
+            "cl-1",
+            Service::Claude,
+            "Claude",
+            CardState::RateLimited,
+            Some("Rate limited. Retrying in 5 min."),
+            None,
+        );
+        claude.buckets = vec![
+            sample_bucket("5 hour", 7.0, false),
+            sample_bucket("Weekly", 84.0, true),
+        ];
+
+        let snap = Snapshot {
+            accounts: vec![claude, antigravity],
+            services: Vec::new(),
+            generated_at_ms: 1_800_000_000_000,
+        };
+        let settings = Settings::default();
+        let mut ui = UiState::default();
+
+        let collapsed_h = popover_logical_height(&ui, &settings, &snap, None);
+        ui.expanded_id = Some("cl-1".to_string());
+        let claude_exp_h = popover_logical_height(&ui, &settings, &snap, None);
+        assert!(claude_exp_h > collapsed_h + 120.0);
+
+        ui.expanded_id = Some("ag-1".to_string());
+        let ag_exp_h = popover_logical_height(&ui, &settings, &snap, None);
+        assert!(ag_exp_h >= 500.0);
     }
 }

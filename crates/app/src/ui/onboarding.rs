@@ -2,11 +2,11 @@
 
 use crate::scheduler::Detected;
 use crate::settings::{Connection, Settings};
-use crate::ui::tokens::{primitives as p, DesignTokens};
+use crate::ui::tokens::{primitives as p, ui_font, DesignTokens};
 use crate::ui::{connection_name, icons, UiMessage};
 use iced::font;
 use iced::widget::{button, column, container, row, rule, space, text, toggler};
-use iced::{Alignment, Element, Font, Length};
+use iced::{Alignment, Element, Length};
 use quotaglass_core::Service;
 
 fn source_found(detected: Option<Detected>, conn: Connection) -> bool {
@@ -38,16 +38,14 @@ pub fn view<'a>(
     let header = column![
         text("Connect your accounts")
             .size(p::TEXT_LG)
-            .font(Font {
-                weight: font::Weight::Semibold,
-                ..Font::DEFAULT
-            })
+            .font(ui_font(font::Weight::Semibold))
             .color(t.semantic.text_primary),
         text("Nothing is read until you turn a source on.")
             .size(p::TEXT_SM)
+            .line_height(1.3)
             .color(t.semantic.text_secondary),
     ]
-    .spacing(3.0);
+    .spacing(4.0);
 
     let mut sources_col = column![].spacing(8.0);
     for conn in [
@@ -66,7 +64,9 @@ pub fn view<'a>(
             _ => "Detected on this PC.",
         };
 
-        let mut tog = toggler(on).style(move |_, status| t.toggler_style(status));
+        let mut tog = toggler(on)
+            .size(22.0)
+            .style(move |_, status| t.toggler_style(status));
         if on || found {
             tog = tog.on_toggle(move |v| UiMessage::ToggleSource(conn, v));
         }
@@ -74,25 +74,22 @@ pub fn view<'a>(
         sources_col = sources_col.push(
             container(
                 row![
-                    icons::provider_icon(svc, 16.0, accent),
+                    icons::provider_icon(svc, 17.0, accent),
                     column![
                         text(connection_name(conn))
                             .size(p::TEXT_BASE)
-                            .font(Font {
-                                weight: font::Weight::Medium,
-                                ..Font::DEFAULT
-                            })
+                            .font(ui_font(font::Weight::Medium))
                             .color(t.semantic.text_primary),
-                        text(note).size(p::TEXT_XS).color(t.semantic.text_muted),
+                        text(note).size(p::TEXT_XS).line_height(1.3).color(t.semantic.text_muted),
                     ]
                     .spacing(2.0)
                     .width(Length::Fill),
                     tog,
                 ]
-                .spacing(10.0)
+                .spacing(12.0)
                 .align_y(Alignment::Center),
             )
-            .padding([9.0, 10.0])
+            .padding([10.0, 12.0])
             .width(Length::Fill)
             .style(move |_| t.subtle_panel_style()),
         );
@@ -106,18 +103,20 @@ pub fn view<'a>(
                     .color(t.semantic.text_primary),
                 text("Once a day, from GitHub. Nothing else is sent.")
                     .size(p::TEXT_XS)
+                    .line_height(1.3)
                     .color(t.semantic.text_muted),
             ]
             .spacing(2.0)
             .width(Length::Fill),
             toggler(settings.check_updates)
+                .size(22.0)
                 .on_toggle(UiMessage::SetCheckUpdates)
                 .style(move |_, status| t.toggler_style(status)),
         ]
-        .spacing(10.0)
+        .spacing(12.0)
         .align_y(Alignment::Center),
     )
-    .padding([8.0, 10.0])
+    .padding([10.0, 12.0])
     .width(Length::Fill)
     .style(move |_| t.subtle_panel_style());
 
@@ -128,14 +127,11 @@ pub fn view<'a>(
             container(
                 text(if any_connected { "Continue" } else { "Skip for now" })
                     .size(p::TEXT_SM)
-                    .font(Font {
-                        weight: font::Weight::Semibold,
-                        ..Font::DEFAULT
-                    }),
+                    .font(ui_font(font::Weight::Semibold)),
             )
             .center_y(Length::Fill),
         )
-        .padding([0.0, 14.0])
+        .padding([0.0, 16.0])
         .height(Length::Fixed(p::TARGET_MIN_H))
         .style(move |_, status| if any_connected {
             t.primary_button_style(status)

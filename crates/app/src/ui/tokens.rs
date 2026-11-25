@@ -4,9 +4,20 @@
 
 use crate::settings::{GlassMode, Theme};
 use iced::border::{self, Border};
+use iced::font;
 use iced::widget::{button, container, rule, scrollable, text_input, toggler};
-use iced::{Background, Color, Shadow, Vector};
+use iced::{Background, Color, Font, Shadow, Vector};
 use quotaglass_core::Service;
+
+/// Crisp Windows UI font used across every text role in QuotaGlass.
+pub const UI_FONT: Font = Font::with_name("Segoe UI");
+
+pub const fn ui_font(weight: font::Weight) -> Font {
+    Font {
+        weight,
+        ..UI_FONT
+    }
+}
 
 /// Layer 1: Primitive design constants (raw brand hues, semantic palette, radii, spacing, type).
 pub mod primitives {
@@ -29,23 +40,28 @@ pub mod primitives {
         0xf6 as f32 / 255.0,
     );
 
-    // Semantic status colors.
+    // Semantic status colors (WCAG AA across bright and dark translucent glass).
     pub const WARN_DARK: Color = Color::from_rgb(
-        0xf5 as f32 / 255.0,
-        0xa5 as f32 / 255.0,
-        0x24 as f32 / 255.0,
+        0xff as f32 / 255.0,
+        0xbe as f32 / 255.0,
+        0x42 as f32 / 255.0,
     );
     pub const WARN_LIGHT: Color = Color::from_rgb(
-        0xa8 as f32 / 255.0,
-        0x62 as f32 / 255.0,
+        0x7d as f32 / 255.0,
+        0x42 as f32 / 255.0,
         0x00 as f32 / 255.0,
     );
     pub const DANGER_DARK: Color = Color::from_rgb(
         0xff as f32 / 255.0,
-        0x5c as f32 / 255.0,
-        0x5c as f32 / 255.0,
+        0xa6 as f32 / 255.0,
+        0xa6 as f32 / 255.0,
     );
     pub const DANGER_LIGHT: Color = Color::from_rgb(
+        0xa6 as f32 / 255.0,
+        0x19 as f32 / 255.0,
+        0x21 as f32 / 255.0,
+    );
+    pub const BURN_BADGE_BG: Color = Color::from_rgb(
         0xc4 as f32 / 255.0,
         0x24 as f32 / 255.0,
         0x2a as f32 / 255.0,
@@ -61,27 +77,27 @@ pub mod primitives {
 
     // Surface base RGBs.
     pub const DARK_LIQUID_RGB: (u8, u8, u8) = (18, 22, 30);
-    pub const LIGHT_LIQUID_RGB: (u8, u8, u8) = (244, 248, 255);
-    pub const DARK_CLEAR_RGB: (u8, u8, u8) = (14, 17, 22);
-    pub const LIGHT_CLEAR_RGB: (u8, u8, u8) = (246, 248, 252);
-    pub const DARK_FROSTED_RGB: (u8, u8, u8) = (22, 24, 30);
+    pub const LIGHT_LIQUID_RGB: (u8, u8, u8) = (242, 246, 252);
+    pub const DARK_CLEAR_RGB: (u8, u8, u8) = (12, 15, 20);
+    pub const LIGHT_CLEAR_RGB: (u8, u8, u8) = (248, 250, 255);
+    pub const DARK_FROSTED_RGB: (u8, u8, u8) = (20, 22, 28);
     pub const LIGHT_FROSTED_RGB: (u8, u8, u8) = (246, 246, 244);
     pub const DARK_SOLID_RGB: (u8, u8, u8) = (18, 20, 25);
     pub const LIGHT_SOLID_RGB: (u8, u8, u8) = (246, 246, 244);
 
     // Distinct glass alphas.
-    pub const ALPHA_CLEAR_DARK: f32 = 0.11;
-    pub const ALPHA_CLEAR_LIGHT: f32 = 0.15;
-    pub const ALPHA_LIQUID_DARK: f32 = 0.30;
-    pub const ALPHA_LIQUID_LIGHT: f32 = 0.36;
-    pub const ALPHA_FROSTED_DARK: f32 = 0.68;
-    pub const ALPHA_FROSTED_LIGHT: f32 = 0.74;
+    pub const ALPHA_CLEAR_DARK: f32 = 0.05;
+    pub const ALPHA_CLEAR_LIGHT: f32 = 0.05;
+    pub const ALPHA_LIQUID_DARK: f32 = 0.36;
+    pub const ALPHA_LIQUID_LIGHT: f32 = 0.40;
+    pub const ALPHA_FROSTED_DARK: f32 = 0.80;
+    pub const ALPHA_FROSTED_LIGHT: f32 = 0.78;
     pub const ALPHA_SOLID_DARK: f32 = 0.96;
     pub const ALPHA_SOLID_LIGHT: f32 = 0.97;
 
-    // Radii & spacing.
-    pub const PILL_RADIUS: f32 = 16.0;
-    pub const POPOVER_RADIUS: f32 = 12.0;
+    // Radii & spacing. Both PILL_RADIUS and POPOVER_RADIUS match DWM DWMWCP_ROUND (8 logical px).
+    pub const PILL_RADIUS: f32 = 8.0;
+    pub const POPOVER_RADIUS: f32 = 8.0;
     pub const CARD_RADIUS: f32 = 10.0;
     pub const CONTROL_RADIUS: f32 = 7.0;
     pub const CHIP_RADIUS: f32 = 999.0;
@@ -91,17 +107,17 @@ pub mod primitives {
     pub const SPACE_MD: f32 = 12.0;
     pub const SPACE_LG: f32 = 16.0;
 
-    // Type scale.
-    pub const TEXT_XS: f32 = 11.0;
-    pub const TEXT_SM: f32 = 12.0;
-    pub const TEXT_BASE: f32 = 13.0;
-    pub const TEXT_MD: f32 = 14.0;
-    pub const TEXT_LG: f32 = 16.0;
+    // Type scale (12px hard floor).
+    pub const TEXT_XS: f32 = 12.0;
+    pub const TEXT_SM: f32 = 13.0;
+    pub const TEXT_BASE: f32 = 14.0;
+    pub const TEXT_MD: f32 = 15.0;
+    pub const TEXT_LG: f32 = 18.0;
 
     // Fitts's Law minimum interactive target height.
-    pub const TARGET_MIN_H: f32 = 36.0;
-    pub const POPOVER_WIDTH: f32 = 364.0;
-    pub const ACCOUNT_LIST_MAX_H: f32 = 420.0;
+    pub const TARGET_MIN_H: f32 = 38.0;
+    pub const POPOVER_WIDTH: f32 = 412.0;
+    pub const ACCOUNT_LIST_MAX_H: f32 = 460.0;
 }
 
 use primitives as p;
@@ -150,6 +166,8 @@ pub struct SemanticTokens {
     pub danger: Color,
     pub danger_soft_bg: Color,
     pub danger_hover_bg: Color,
+    pub burn_bg: Color,
+    pub burn_ink: Color,
     pub shimmer_base: Color,
     pub shimmer_highlight: Color,
     pub grip_dot: Color,
@@ -190,7 +208,7 @@ impl SemanticTokens {
                         p::DARK_LIQUID_RGB.2,
                         p::ALPHA_LIQUID_DARK,
                     ),
-                    rgba8(255, 255, 255, 0.24),
+                    rgba8(255, 255, 255, 0.28),
                 ),
                 (false, GlassMode::LiquidGlass) => (
                     rgba8(
@@ -199,7 +217,7 @@ impl SemanticTokens {
                         p::LIGHT_LIQUID_RGB.2,
                         p::ALPHA_LIQUID_LIGHT,
                     ),
-                    rgba8(255, 255, 255, 0.72),
+                    rgba8(255, 255, 255, 0.80),
                 ),
                 (true, GlassMode::Clear) => (
                     rgba8(
@@ -208,7 +226,7 @@ impl SemanticTokens {
                         p::DARK_CLEAR_RGB.2,
                         p::ALPHA_CLEAR_DARK,
                     ),
-                    rgba8(255, 255, 255, 0.34),
+                    rgba8(255, 255, 255, 0.42),
                 ),
                 (false, GlassMode::Clear) => (
                     rgba8(
@@ -217,7 +235,7 @@ impl SemanticTokens {
                         p::LIGHT_CLEAR_RGB.2,
                         p::ALPHA_CLEAR_LIGHT,
                     ),
-                    rgba8(255, 255, 255, 0.78),
+                    rgba8(255, 255, 255, 0.88),
                 ),
                 (true, GlassMode::Frosted) => (
                     rgba8(
@@ -226,7 +244,7 @@ impl SemanticTokens {
                         p::DARK_FROSTED_RGB.2,
                         p::ALPHA_FROSTED_DARK,
                     ),
-                    rgba8(255, 255, 255, 0.18),
+                    rgba8(255, 255, 255, 0.22),
                 ),
                 (false, GlassMode::Frosted) => (
                     rgba8(
@@ -235,23 +253,29 @@ impl SemanticTokens {
                         p::LIGHT_FROSTED_RGB.2,
                         p::ALPHA_FROSTED_LIGHT,
                     ),
-                    rgba8(255, 255, 255, 0.85),
+                    rgba8(0, 0, 0, 0.14),
                 ),
             }
         };
 
         if is_dark {
-            let (card, card_hover, card_expanded) = if glass_mode == GlassMode::Clear && os_glass {
+            let (card, card_hover, card_expanded) = if !os_glass || glass_mode == GlassMode::Frosted {
                 (
-                    rgba8(12, 14, 19, 0.36),
-                    rgba8(18, 21, 28, 0.44),
-                    rgba8(20, 24, 32, 0.48),
+                    rgba8(255, 255, 255, 0.05),
+                    rgba8(255, 255, 255, 0.085),
+                    rgba8(255, 255, 255, 0.10),
+                )
+            } else if glass_mode == GlassMode::Clear {
+                (
+                    rgba8(12, 14, 20, 0.75),
+                    rgba8(18, 21, 28, 0.81),
+                    rgba8(22, 26, 35, 0.85),
                 )
             } else {
                 (
-                    rgba8(255, 255, 255, 0.065),
-                    rgba8(255, 255, 255, 0.105),
-                    rgba8(255, 255, 255, 0.12),
+                    rgba8(14, 18, 26, 0.62),
+                    rgba8(20, 25, 35, 0.69),
+                    rgba8(24, 30, 42, 0.74),
                 )
             };
             Self {
@@ -262,31 +286,33 @@ impl SemanticTokens {
                 surface_card: card,
                 surface_card_hover: card_hover,
                 surface_card_expanded: card_expanded,
-                surface_control: rgba8(255, 255, 255, 0.10),
-                surface_control_hover: rgba8(255, 255, 255, 0.17),
-                surface_control_pressed: rgba8(255, 255, 255, 0.22),
-                surface_tab_active: rgba8(255, 255, 255, 0.18),
+                surface_control: rgba8(255, 255, 255, 0.11),
+                surface_control_hover: rgba8(255, 255, 255, 0.18),
+                surface_control_pressed: rgba8(255, 255, 255, 0.24),
+                surface_tab_active: rgba8(255, 255, 255, 0.22),
                 rim_specular,
-                border_subtle: rgba8(255, 255, 255, 0.12),
+                border_subtle: rgba8(255, 255, 255, 0.16),
                 text_primary: p::INK_WHITE,
-                text_secondary: rgba8(226, 230, 238, 1.0),
-                text_muted: rgba8(184, 191, 204, 1.0),
-                text_disabled: rgba8(138, 145, 158, 0.72),
+                text_secondary: rgba8(232, 236, 244, 1.0),
+                text_muted: rgba8(206, 213, 226, 1.0),
+                text_disabled: rgba8(152, 160, 174, 0.80),
                 best_bg: p::INK_WHITE,
                 best_ink: p::INK_BLACK,
                 primary_bg: p::INK_WHITE,
                 primary_ink: p::INK_BLACK,
-                track_bg: rgba8(255, 255, 255, 0.16),
-                tick_line: rgba8(16, 18, 24, 0.62),
+                track_bg: rgba8(255, 255, 255, 0.18),
+                tick_line: rgba8(16, 18, 24, 0.65),
                 pace_marker: p::INK_WHITE,
                 warn: p::WARN_DARK,
-                warn_soft_bg: rgba8(245, 165, 36, 0.18),
+                warn_soft_bg: rgba8(255, 190, 66, 0.22),
                 danger: p::DANGER_DARK,
-                danger_soft_bg: rgba8(255, 92, 92, 0.18),
-                danger_hover_bg: rgba8(255, 92, 92, 0.28),
-                shimmer_base: rgba8(255, 255, 255, 0.09),
-                shimmer_highlight: rgba8(255, 255, 255, 0.20),
-                grip_dot: rgba8(255, 255, 255, 0.75),
+                danger_soft_bg: rgba8(118, 22, 28, 0.86),
+                danger_hover_bg: rgba8(156, 28, 36, 0.94),
+                burn_bg: p::BURN_BADGE_BG,
+                burn_ink: p::INK_WHITE,
+                shimmer_base: rgba8(255, 255, 255, 0.10),
+                shimmer_highlight: rgba8(255, 255, 255, 0.22),
+                grip_dot: rgba8(255, 255, 255, 0.82),
                 shadow: Shadow {
                     color: rgba8(0, 0, 0, 0.26),
                     offset: Vector::new(0.0, 2.0),
@@ -294,17 +320,23 @@ impl SemanticTokens {
                 },
             }
         } else {
-            let (card, card_hover, card_expanded) = if !os_glass {
+            let (card, card_hover, card_expanded) = if !os_glass || glass_mode == GlassMode::Frosted {
                 (
-                    rgba8(255, 255, 255, 0.78),
+                    rgba8(255, 255, 255, 0.80),
                     rgba8(255, 255, 255, 0.88),
                     rgba8(255, 255, 255, 0.94),
                 )
+            } else if glass_mode == GlassMode::Clear {
+                (
+                    rgba8(255, 255, 255, 0.80),
+                    rgba8(255, 255, 255, 0.87),
+                    rgba8(255, 255, 255, 0.91),
+                )
             } else {
                 (
-                    rgba8(255, 255, 255, 0.64),
-                    rgba8(255, 255, 255, 0.74),
-                    rgba8(255, 255, 255, 0.80),
+                    rgba8(255, 255, 255, 0.68),
+                    rgba8(255, 255, 255, 0.78),
+                    rgba8(255, 255, 255, 0.84),
                 )
             };
             Self {
@@ -315,31 +347,33 @@ impl SemanticTokens {
                 surface_card: card,
                 surface_card_hover: card_hover,
                 surface_card_expanded: card_expanded,
-                surface_control: rgba8(0, 0, 0, 0.06),
-                surface_control_hover: rgba8(0, 0, 0, 0.11),
-                surface_control_pressed: rgba8(0, 0, 0, 0.16),
-                surface_tab_active: rgba8(0, 0, 0, 0.11),
+                surface_control: rgba8(0, 0, 0, 0.08),
+                surface_control_hover: rgba8(0, 0, 0, 0.14),
+                surface_control_pressed: rgba8(0, 0, 0, 0.20),
+                surface_tab_active: rgba8(0, 0, 0, 0.15),
                 rim_specular,
-                border_subtle: rgba8(0, 0, 0, 0.10),
+                border_subtle: rgba8(0, 0, 0, 0.18),
                 text_primary: p::INK_BLACK,
-                text_secondary: rgba8(42, 46, 54, 1.0),
-                text_muted: rgba8(76, 82, 92, 1.0),
-                text_disabled: rgba8(118, 124, 134, 0.72),
+                text_secondary: rgba8(32, 36, 44, 1.0),
+                text_muted: rgba8(62, 68, 78, 1.0),
+                text_disabled: rgba8(102, 108, 118, 0.82),
                 best_bg: p::INK_BLACK,
                 best_ink: p::INK_WHITE,
                 primary_bg: p::INK_BLACK,
                 primary_ink: p::INK_WHITE,
-                track_bg: rgba8(0, 0, 0, 0.13),
-                tick_line: rgba8(246, 246, 244, 0.78),
+                track_bg: rgba8(0, 0, 0, 0.15),
+                tick_line: rgba8(246, 246, 244, 0.82),
                 pace_marker: p::INK_BLACK,
                 warn: p::WARN_LIGHT,
-                warn_soft_bg: rgba8(168, 98, 0, 0.13),
+                warn_soft_bg: rgba8(125, 66, 0, 0.16),
                 danger: p::DANGER_LIGHT,
-                danger_soft_bg: rgba8(196, 36, 42, 0.12),
-                danger_hover_bg: rgba8(196, 36, 42, 0.20),
-                shimmer_base: rgba8(0, 0, 0, 0.06),
-                shimmer_highlight: rgba8(0, 0, 0, 0.13),
-                grip_dot: rgba8(17, 17, 17, 0.65),
+                danger_soft_bg: rgba8(252, 232, 234, 0.90),
+                danger_hover_bg: rgba8(245, 210, 214, 0.96),
+                burn_bg: p::BURN_BADGE_BG,
+                burn_ink: p::INK_WHITE,
+                shimmer_base: rgba8(0, 0, 0, 0.07),
+                shimmer_highlight: rgba8(0, 0, 0, 0.15),
+                grip_dot: rgba8(17, 17, 17, 0.78),
                 shadow: Shadow {
                     color: rgba8(0, 0, 0, 0.12),
                     offset: Vector::new(0.0, 2.0),
@@ -375,14 +409,14 @@ impl DesignTokens {
         }
     }
 
-    pub fn pill_container_style(&self, scale: f32) -> container::Style {
+    pub fn pill_container_style(&self) -> container::Style {
         container::Style {
             text_color: Some(self.semantic.text_primary),
             background: Some(Background::Color(self.semantic.surface_base)),
             border: Border {
                 color: self.semantic.rim_specular,
                 width: 1.0,
-                radius: border::radius(p::PILL_RADIUS * scale.max(0.65)),
+                radius: border::radius(p::PILL_RADIUS),
             },
             shadow: Shadow::default(),
             snap: true,
@@ -491,14 +525,19 @@ impl DesignTokens {
     }
 
     pub fn burn_chip_style(&self) -> container::Style {
-        self.chip_style(
-            self.semantic.danger_soft_bg,
-            self.semantic.danger,
-            Color {
-                a: 0.36,
-                ..self.semantic.danger
-            },
-        )
+        let border_color = if self.is_dark() {
+            rgba8(255, 255, 255, 0.24)
+        } else {
+            rgba8(130, 16, 22, 0.50)
+        };
+        self.chip_style(self.semantic.burn_bg, self.semantic.burn_ink, border_color)
+    }
+
+    pub fn segmented_button_style(&self, active: bool, status: button::Status) -> button::Style {
+        if active {
+            return self.primary_button_style(status);
+        }
+        self.quiet_button_style(false, status)
     }
 
     pub fn tab_button_style(&self, active: bool, status: button::Status) -> button::Style {
@@ -509,7 +548,11 @@ impl DesignTokens {
             (false, _) => Color::TRANSPARENT,
         };
         let border_color = if active {
-            self.semantic.rim_specular
+            if self.is_dark() {
+                self.semantic.rim_specular
+            } else {
+                rgba8(0, 0, 0, 0.28)
+            }
         } else {
             Color::TRANSPARENT
         };
@@ -857,17 +900,17 @@ mod tests {
             );
 
             if expected_dark {
-                assert!(approx(a_clear, 0.11));
-                assert!(approx(a_liquid, 0.30));
-                assert!(approx(a_frosted, 0.68));
-                assert!(approx(a_solid, 0.96));
-                assert!(approx(liquid.semantic.rim_specular.a, 0.24));
-            } else {
-                assert!(approx(a_clear, 0.15));
+                assert!(approx(a_clear, 0.05));
                 assert!(approx(a_liquid, 0.36));
-                assert!(approx(a_frosted, 0.74));
+                assert!(approx(a_frosted, 0.80));
+                assert!(approx(a_solid, 0.96));
+                assert!(approx(liquid.semantic.rim_specular.a, 0.28));
+            } else {
+                assert!(approx(a_clear, 0.05));
+                assert!(approx(a_liquid, 0.40));
+                assert!(approx(a_frosted, 0.78));
                 assert!(approx(a_solid, 0.97));
-                assert!(approx(liquid.semantic.rim_specular.a, 0.72));
+                assert!(approx(liquid.semantic.rim_specular.a, 0.80));
             }
 
             // Solid fallback overrides all 3 glass modes equally.
@@ -888,69 +931,90 @@ mod tests {
     }
 
     #[test]
+    fn type_scale_enforces_12px_floor_and_matching_dwm_radii() {
+        const {
+            assert!(p::TEXT_XS >= 12.0);
+            assert!(p::TEXT_SM > p::TEXT_XS);
+            assert!(p::TEXT_BASE > p::TEXT_SM);
+            assert!(p::TEXT_MD > p::TEXT_BASE);
+            assert!(p::TEXT_LG > p::TEXT_MD);
+        }
+        assert_eq!(p::PILL_RADIUS, 8.0);
+        assert_eq!(p::POPOVER_RADIUS, 8.0);
+    }
+
+    #[test]
     fn contrast_meets_readable_wcag_aa_floors() {
-        let dark_desktop = Color::from_rgb8(18, 20, 26);
-        let light_desktop = Color::from_rgb8(242, 244, 248);
+        let dark_desktop = Color::from_rgb8(0x12, 0x14, 0x1a);
+        let light_desktop = Color::from_rgb8(0xf0, 0xec, 0xe2);
 
         for mode in [GlassMode::Clear, GlassMode::LiquidGlass, GlassMode::Frosted] {
             for os_glass in [true, false] {
-                let dark = DesignTokens::resolve(Theme::Dark, mode, true, os_glass);
-                let dark_bg = composite_over(
-                    dark.semantic.surface_card,
-                    composite_over(dark.semantic.surface_base, dark_desktop),
-                );
-                assert!(
-                    contrast_ratio(dark.semantic.text_primary, dark_bg) >= 7.0,
-                    "dark primary text contrast too low for {mode:?} os_glass={os_glass}"
-                );
-                assert!(
-                    contrast_ratio(dark.semantic.text_secondary, dark_bg) >= 4.5,
-                    "dark secondary text contrast too low for {mode:?} os_glass={os_glass}"
-                );
-                assert!(
-                    contrast_ratio(dark.semantic.text_muted, dark_bg) >= 4.5,
-                    "dark muted text contrast too low for {mode:?} os_glass={os_glass}"
-                );
-                assert!(
-                    contrast_ratio(dark.semantic.best_ink, dark.semantic.best_bg) >= 12.0
-                );
-                assert!(
-                    contrast_ratio(dark.semantic.warn, dark_bg) >= 4.5,
-                    "dark warn contrast too low"
-                );
-                assert!(
-                    contrast_ratio(dark.semantic.danger, dark_bg) >= 4.5,
-                    "dark danger contrast too low"
-                );
+                for wallpaper in [dark_desktop, light_desktop] {
+                    let dark = DesignTokens::resolve(Theme::Dark, mode, true, os_glass);
+                    let dark_bg = composite_over(
+                        dark.semantic.surface_card,
+                        composite_over(dark.semantic.surface_base, wallpaper),
+                    );
+                    assert!(
+                        contrast_ratio(dark.semantic.text_primary, dark_bg) >= 7.0,
+                        "dark primary text contrast too low for {mode:?} os_glass={os_glass}"
+                    );
+                    assert!(
+                        contrast_ratio(dark.semantic.text_secondary, dark_bg) >= 4.5,
+                        "dark secondary text contrast too low for {mode:?} os_glass={os_glass}"
+                    );
+                    assert!(
+                        contrast_ratio(dark.semantic.text_muted, dark_bg) >= 4.5,
+                        "dark muted text contrast too low for {mode:?} os_glass={os_glass}"
+                    );
+                    assert!(
+                        contrast_ratio(dark.semantic.best_ink, dark.semantic.best_bg) >= 12.0
+                    );
+                    assert!(
+                        contrast_ratio(dark.semantic.burn_ink, dark.semantic.burn_bg) >= 4.5
+                    );
+                    assert!(
+                        contrast_ratio(dark.semantic.warn, dark_bg) >= 4.5,
+                        "dark warn contrast too low for {mode:?} os_glass={os_glass}"
+                    );
+                    assert!(
+                        contrast_ratio(dark.semantic.danger, dark_bg) >= 4.5,
+                        "dark danger contrast too low for {mode:?} os_glass={os_glass}"
+                    );
 
-                let light = DesignTokens::resolve(Theme::Light, mode, false, os_glass);
-                let light_bg = composite_over(
-                    light.semantic.surface_card,
-                    composite_over(light.semantic.surface_base, light_desktop),
-                );
-                assert!(
-                    contrast_ratio(light.semantic.text_primary, light_bg) >= 7.0,
-                    "light primary text contrast too low for {mode:?} os_glass={os_glass}"
-                );
-                assert!(
-                    contrast_ratio(light.semantic.text_secondary, light_bg) >= 4.5,
-                    "light secondary text contrast too low for {mode:?} os_glass={os_glass}"
-                );
-                assert!(
-                    contrast_ratio(light.semantic.text_muted, light_bg) >= 4.5,
-                    "light muted text contrast too low for {mode:?} os_glass={os_glass}"
-                );
-                assert!(
-                    contrast_ratio(light.semantic.best_ink, light.semantic.best_bg) >= 12.0
-                );
-                assert!(
-                    contrast_ratio(light.semantic.warn, light_bg) >= 4.5,
-                    "light warn contrast too low"
-                );
-                assert!(
-                    contrast_ratio(light.semantic.danger, light_bg) >= 4.5,
-                    "light danger contrast too low"
-                );
+                    let light = DesignTokens::resolve(Theme::Light, mode, false, os_glass);
+                    let light_bg = composite_over(
+                        light.semantic.surface_card,
+                        composite_over(light.semantic.surface_base, wallpaper),
+                    );
+                    assert!(
+                        contrast_ratio(light.semantic.text_primary, light_bg) >= 7.0,
+                        "light primary text contrast too low for {mode:?} os_glass={os_glass}"
+                    );
+                    assert!(
+                        contrast_ratio(light.semantic.text_secondary, light_bg) >= 4.5,
+                        "light secondary text contrast too low for {mode:?} os_glass={os_glass}"
+                    );
+                    assert!(
+                        contrast_ratio(light.semantic.text_muted, light_bg) >= 4.5,
+                        "light muted text contrast too low for {mode:?} os_glass={os_glass}"
+                    );
+                    assert!(
+                        contrast_ratio(light.semantic.best_ink, light.semantic.best_bg) >= 12.0
+                    );
+                    assert!(
+                        contrast_ratio(light.semantic.burn_ink, light.semantic.burn_bg) >= 4.5
+                    );
+                    assert!(
+                        contrast_ratio(light.semantic.warn, light_bg) >= 4.5,
+                        "light warn contrast too low for {mode:?} os_glass={os_glass}"
+                    );
+                    assert!(
+                        contrast_ratio(light.semantic.danger, light_bg) >= 4.5,
+                        "light danger contrast too low for {mode:?} os_glass={os_glass}"
+                    );
+                }
             }
         }
     }

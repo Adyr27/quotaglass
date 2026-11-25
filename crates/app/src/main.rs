@@ -16,7 +16,7 @@ use quotaglass_app::settings::{
 };
 use quotaglass_app::state::{now_utc_ms, JsonStore, SnapshotCache};
 use quotaglass_app::tray::{self, TrayController, TrayEvent};
-use quotaglass_app::ui::tokens::{resolve_theme_dark, DesignTokens};
+use quotaglass_app::ui::tokens::{resolve_theme_dark, DesignTokens, UI_FONT};
 use quotaglass_app::ui::{
     format_first_run_flag, pill, popover, popover_logical_height, select_tab_and_persist,
     tab_for_service, Page, UiMessage, UiState,
@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch, Notify};
 use tokio::task::JoinHandle;
 
-const DRAG_THRESHOLD_PX: i32 = 5;
+const DRAG_THRESHOLD_PX: i32 = 8;
 const OPEN_BLUR_GRACE: Duration = Duration::from_millis(150);
 const PILL_CLICK_SUPPRESS_AFTER_BLUR: Duration = Duration::from_millis(300);
 
@@ -61,10 +61,13 @@ struct PillPress {
 #[derive(Debug, Clone)]
 struct GripDrag {
     start_x_px: i32,
+    start_left_x: i32,
+    start_center_y: i64,
     start_width_px: u32,
     start_scale: f64,
     zoom: f64,
     slots: u32,
+    monitor_bounds: MonitorRect,
 }
 
 #[derive(Debug, Clone)]
@@ -264,7 +267,21 @@ impl App {
         });
 
         let pop_w = quotaglass_app::ui::tokens::primitives::POPOVER_WIDTH;
-        let pop_h = popover_logical_height(&ui, &settings, &snapshot, None);
+        let initial_mon = monitor_for_rect(initial_pill, &monitors);
+        let initial_work = initial_mon.map_or(
+            MonitorRect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1040,
+            },
+            |m| m.work,
+        );
+        let pop_h = clamp_popover_height_to_work(
+            popover_logical_height(&ui, &settings, &snapshot, None),
+            initial_work,
+            zoom,
+        );
         let (popover_id, open_popover) = window::open(window::Settings {
             size: Size::new(pop_w, pop_h),
             position: window::Position::Default,
@@ -510,11 +527,15 @@ impl App {
             |m| m.work,
         );
         let pop_w_logical = quotaglass_app::ui::tokens::primitives::POPOVER_WIDTH;
-        let pop_h_logical = popover_logical_height(
-            &self.ui,
-            &self.settings,
-            &self.snapshot,
-            self.update_version.as_deref(),
+        let pop_h_logical = clamp_popover_height_to_work(
+            popover_logical_height(
+                &self.ui,
+                &self.settings,
+                &self.snapshot,
+                self.update_version.as_deref(),
+            ),
+            work,
+            zoom,
         );
         let pop_w_px = (f64::from(pop_w_logical) * zoom).round() as u32;
         let pop_h_px = (f64::from(pop_h_logical) * zoom).round() as u32;
@@ -528,6 +549,7 @@ impl App {
 
     fn show_popover(&mut self, service: Option<Service>, page: Option<Page>) -> Task<Message> {
         self.now_ms = now_utc_ms();
+        self.os_glass = win32::transparency_enabled();
         self.anchor_service = service;
         if let Some(p) = page {
             self.ui.page = p;
@@ -680,13 +702,13 @@ impl App {
                             self.settings.pill_scale = next_scale;
                             let (nw, nh) =
                                 win32::pill_px_size(drag.slots, next_scale, drag.zoom);
-                            let cur = self.current_pill_rect();
-                            let next_rect = WindowRect {
-                                x: cur.x,
-                                y: cur.y,
-                                width: nw,
-                                height: nh,
-                            };
+                            let next_rect = win32::resized_pill_rect(
+                                drag.start_left_x,
+                                drag.start_center_y,
+                                nw,
+                                nh,
+                                drag.monitor_bounds,
+                            );
                             if let Some(h) = self.pill_hwnd {
                                 win32::move_and_resize_px(h, next_rect);
                             }
@@ -1009,16 +1031,28 @@ impl App {
                     return Task::none();
                 }
                 let rect = self.current_pill_rect();
-                let zoom = monitor_for_rect(rect, &self.monitors)
-                    .map_or(1.0, DisplayMonitor::scale_factor);
+                let mon = monitor_for_rect(rect, &self.monitors);
+                let zoom = mon.map_or(1.0, DisplayMonitor::scale_factor);
+                let monitor_bounds = mon.map_or(
+                    MonitorRect {
+                        x: 0,
+                        y: 0,
+                        width: 1920,
+                        height: 1080,
+                    },
+                    |m| m.full,
+                );
                 let slots = (self.snapshot.services.len() as u32).clamp(1, 3);
                 if let Some((cx, _)) = win32::cursor_pos_px() {
                     self.grip_drag = Some(GripDrag {
                         start_x_px: cx,
+                        start_left_x: rect.x,
+                        start_center_y: i64::from(rect.y) + i64::from(rect.height) / 2,
                         start_width_px: rect.width,
                         start_scale: self.settings.pill_scale,
                         zoom,
                         slots,
+                        monitor_bounds,
                     });
                 }
                 Task::none()
@@ -1272,12 +1306,14 @@ impl App {
                 self.sync_popover_bounds()
             }
             UiMessage::SetTheme(theme) => {
+                self.os_glass = win32::transparency_enabled();
                 self.settings.theme = theme;
                 self.save_settings();
                 self.apply_glass_to_windows();
                 Task::none()
             }
             UiMessage::SetGlassMode(mode) => {
+                self.os_glass = win32::transparency_enabled();
                 self.settings.set_glass_mode(mode);
                 self.save_settings();
                 self.apply_glass_to_windows();
@@ -1523,6 +1559,12 @@ fn win32_platform_specific() -> PlatformSpecific {
     }
 }
 
+fn clamp_popover_height_to_work(raw_logical_h: f32, work: MonitorRect, zoom: f64) -> f32 {
+    let z = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    let max_logical = ((f64::from(work.height) / z) - 24.0).max(240.0) as f32;
+    raw_logical_h.min(max_logical).max(220.0)
+}
+
 fn primary_zoom(monitors: &[DisplayMonitor]) -> f64 {
     monitors
         .iter()
@@ -1600,6 +1642,7 @@ fn main() -> iced::Result {
 
     iced::daemon(App::boot, App::update, App::view)
         .title(App::title)
+        .default_font(UI_FONT)
         .antialiasing(true)
         .theme(App::theme)
         .style(App::style)
@@ -1792,10 +1835,18 @@ mod tests {
         // Grip drag release followed by MouseArea release must NOT open the popover.
         app.grip_drag = Some(GripDrag {
             start_x_px: 100,
+            start_left_x: 100,
+            start_center_y: 500,
             start_width_px: 80,
             start_scale: 1.0,
             zoom: 1.0,
             slots: 1,
+            monitor_bounds: MonitorRect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
         });
         let _ = app.update(Message::MouseReleaseOnWindow(app.pill_id));
         let _ = app.update(Message::Ui(UiMessage::PillSlotReleased(Some(Service::Claude))));
@@ -1835,6 +1886,47 @@ mod tests {
             !app.ui.pending.refreshing,
             "refreshing flag must stay false when no scheduler/provider tasks exist"
         );
+    }
+
+    #[test]
+    fn popover_height_clamps_to_compact_and_scaled_work_areas() {
+        let compact_work = MonitorRect {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 720,
+        };
+        // At 150% DPI (zoom 1.5), 720px physical is 480px logical -> clamped <= 456.0 logical.
+        let h_150 = clamp_popover_height_to_work(650.0, compact_work, 1.5);
+        assert!((240.0..=456.0).contains(&h_150));
+
+        // At 100% DPI on 1040px work area, 580.0 fits unclipped.
+        let desktop_work = MonitorRect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1040,
+        };
+        assert_eq!(clamp_popover_height_to_work(580.0, desktop_work, 1.0), 580.0);
+
+        // Verify flyout placement across narrow (360), target (412), and wide (440) widths.
+        let pill = win32::default_pill_rect(desktop_work, win32::pill_px_size(3, 1.0, 1.0), 1.0);
+        for w in [360u32, 412u32, 440u32] {
+            let (pop, up) = win32::flyout_rect(pill, (pill.width / 2) as i32, w, 580, desktop_work, 1.0);
+            assert!(up);
+            assert_eq!(pop.width, w);
+            assert!(pop.x >= desktop_work.x);
+            assert!(pop.x + pop.width as i32 <= desktop_work.x + desktop_work.width as i32);
+            assert!(pop.y >= desktop_work.y);
+            assert!(pop.y + pop.height as i32 <= pill.y);
+        }
+    }
+
+    #[test]
+    fn drag_threshold_prevents_touch_tap_misfires() {
+        const {
+            assert!(DRAG_THRESHOLD_PX >= 8);
+        }
     }
 
     proptest! {

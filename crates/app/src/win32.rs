@@ -11,7 +11,7 @@ const MARGIN: i64 = 24;
 pub const GAP_CSS: u32 = 6;
 pub const PILL_SLOT: u32 = 24;
 pub const PILL_GAP: u32 = 8;
-pub const PILL_PAD: u32 = 8;
+pub const PILL_PAD: u32 = 10;
 pub const PILL_H: u32 = 32;
 
 /// Non-zero Win32 `HWND` wrapper bridged from `iced::window::raw_id(id)` or `iced::window::Window`.
@@ -384,6 +384,26 @@ pub fn fit_in(r: WindowRect, bounds: MonitorRect) -> WindowRect {
     }
 }
 
+/// Computes a resized pill rect keeping its left edge and vertical center anchored, clamped to `bounds`.
+pub fn resized_pill_rect(
+    left_x: i32,
+    center_y: i64,
+    w: u32,
+    h: u32,
+    bounds: MonitorRect,
+) -> WindowRect {
+    let y = clamp_i32(center_y - i64::from(h) / 2);
+    fit_in(
+        WindowRect {
+            x: left_x,
+            y,
+            width: w,
+            height: h,
+        },
+        bounds,
+    )
+}
+
 /// Places the popover cleanly above or below `pill` inside `work`, returning `(rect, opens_upward)`.
 pub fn flyout_rect(
     pill: WindowRect,
@@ -669,34 +689,17 @@ mod imp {
             return false;
         }
         set_immersive_dark_mode(hwnd, dark);
-        match mode {
-            GlassMode::LiquidGlass => {
-                let tint = if dark {
-                    (18, 22, 30, 128)
-                } else {
-                    (244, 248, 255, 148)
-                };
-                window_vibrancy::apply_acrylic(hwnd, Some(tint)).is_ok()
-            }
-            GlassMode::Clear => {
-                let tint = if dark {
-                    (12, 14, 18, 34)
-                } else {
-                    (248, 250, 255, 44)
-                };
-                window_vibrancy::apply_blur(hwnd, Some(tint)).is_ok()
-                    || window_vibrancy::apply_acrylic(hwnd, Some(tint)).is_ok()
-            }
-            GlassMode::Frosted => {
-                let fallback = if dark {
-                    (24, 26, 32, 205)
-                } else {
-                    (246, 246, 244, 212)
-                };
-                window_vibrancy::apply_mica(hwnd, Some(dark)).is_ok()
-                    || window_vibrancy::apply_acrylic(hwnd, Some(fallback)).is_ok()
-            }
-        }
+        // Never call `apply_blur` (`ACCENT_ENABLE_BLURBEHIND`): it blacks out Light mode on Win11
+        // transparent wgpu windows. Calibrated `apply_acrylic` works reliably across all 3 modes.
+        let tint = match (mode, dark) {
+            (GlassMode::Clear, true) => (14, 17, 22, 42),
+            (GlassMode::Clear, false) => (248, 250, 255, 52),
+            (GlassMode::LiquidGlass, true) => (18, 22, 30, 140),
+            (GlassMode::LiquidGlass, false) => (244, 248, 255, 150),
+            (GlassMode::Frosted, true) => (20, 22, 28, 210),
+            (GlassMode::Frosted, false) => (246, 246, 244, 215),
+        };
+        window_vibrancy::apply_acrylic(hwnd, Some(tint)).is_ok()
     }
 
     pub fn round_corners(hwnd: HwndHandle) {
@@ -1191,12 +1194,30 @@ mod tests {
             height: 1040,
         };
         let pill = default_pill_rect(work, pill_px_size(3, 1.0, 1.0), 1.0);
-        assert_eq!(pill, rect(1920 - 104 - 24, 1040 - 32 - 24, 104, 32));
+        assert_eq!(pill, rect(1920 - 108 - 24, 1040 - 32 - 24, 108, 32));
 
-        let (pop, up) = flyout_rect(pill, 52, 340, 240, work, 1.0);
+        let (pop, up) = flyout_rect(pill, 54, 412, 240, work, 1.0);
         assert!(up);
         assert!(pop.y + pop.height as i32 <= pill.y);
         assert!(pop.x >= work.x && pop.x + pop.width as i32 <= work.x + work.width as i32);
+    }
+
+    #[test]
+    fn resized_pill_rect_keeps_vertical_center_and_clamps_to_monitor() {
+        let bounds = MonitorRect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        // Center at y = 500 -> growing to h = 64 centers at 468..532.
+        let r = resized_pill_rect(1200, 500, 216, 64, bounds);
+        assert_eq!(r, rect(1200, 468, 216, 64));
+
+        // Near bottom edge (center = 1070): clamps cleanly inside monitor bottom.
+        let near_bottom = resized_pill_rect(1800, 1070, 216, 64, bounds);
+        assert_eq!(near_bottom.x, 1920 - 216);
+        assert_eq!(near_bottom.y, 1080 - 64);
     }
 
     #[test]

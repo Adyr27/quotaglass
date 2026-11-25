@@ -5,14 +5,14 @@ use crate::connect::UrlTarget;
 use crate::scheduler::Detected;
 use crate::settings::{ProviderTab, Settings};
 use crate::state::format_updated_ago;
-use crate::ui::tokens::{primitives as p, DesignTokens};
+use crate::ui::tokens::{primitives as p, ui_font, DesignTokens};
 use crate::ui::{
     account_card, faq, icons, onboarding, settings as settings_view, tab_label,
     visible_accounts_for_tab, Page, UiMessage, UiState,
 };
 use iced::font;
 use iced::widget::{button, column, container, row, rule, scrollable, space, text};
-use iced::{Alignment, Element, Font, Length};
+use iced::{Alignment, Element, Length, Padding};
 use quotaglass_core::view::Snapshot;
 use quotaglass_core::Service;
 
@@ -34,14 +34,11 @@ fn top_bar<'a>(
         let active = settings.active_tab == tab;
         tab_row = tab_row.push(
             button(
-                container(text(tab_label(tab)).size(p::TEXT_SM).font(Font {
-                    weight: if active {
-                        font::Weight::Semibold
-                    } else {
-                        font::Weight::Normal
-                    },
-                    ..Font::DEFAULT
-                }))
+                container(text(tab_label(tab)).size(p::TEXT_SM).font(ui_font(if active {
+                    font::Weight::Semibold
+                } else {
+                    font::Weight::Normal
+                })))
                 .center_y(Length::Fill),
             )
             .padding([0.0, 9.0])
@@ -61,14 +58,18 @@ fn top_bar<'a>(
         container(
             row![
                 icons::tinted_svg(icons::REFRESH_SVG, 14.0, refresh_icon_color),
-                text(if can_refresh { "Refresh" } else { "..." }).size(p::TEXT_SM),
+                text(if can_refresh { "Refresh" } else { "Syncing" })
+                    .size(p::TEXT_SM)
+                    .font(ui_font(font::Weight::Medium)),
             ]
-            .spacing(5.0)
+            .spacing(6.0)
             .align_y(Alignment::Center),
         )
+        .center_x(Length::Fill)
         .center_y(Length::Fill),
     )
     .padding([0.0, 10.0])
+    .width(Length::Fixed(94.0))
     .height(Length::Fixed(p::TARGET_MIN_H))
     .style(move |_, status| t.quiet_button_style(false, status))
     .on_press_maybe(can_refresh.then_some(UiMessage::RefreshNow));
@@ -136,8 +137,8 @@ fn list_page<'a>(
         .align_y(Alignment::Center),
     );
 
-    // Scrollable account list capped cleanly at 420.0 logical px.
-    let mut list_col = column![].spacing(8.0);
+    // Scrollable account list fills only the space between pinned header and pinned footer.
+    let mut list_col = column![].spacing(10.0);
     if ui.is_skeleton_loading(snapshot) {
         list_col = list_col
             .push(account_card::skeleton_card(&t, ui.animations.shimmer_phase))
@@ -157,6 +158,7 @@ fn list_page<'a>(
             container(
                 text(empty_msg)
                     .size(p::TEXT_SM)
+                    .line_height(1.35)
                     .color(t.semantic.text_secondary),
             )
             .padding(14.0)
@@ -169,15 +171,16 @@ fn list_page<'a>(
         }
     }
 
+    let scroll_content = container(list_col).padding(Padding::ZERO.right(10.0).bottom(8.0));
     let list_scroll = container(
-        scrollable(list_col)
+        scrollable(scroll_content)
             .width(Length::Fill)
-            .height(Length::Shrink)
+            .height(Length::Fill)
             .spacing(4.0)
             .style(move |_, status| t.scrollable_style(status)),
     )
     .width(Length::Fill)
-    .max_height(p::ACCOUNT_LIST_MAX_H);
+    .height(Length::Fill);
     root = root.push(list_scroll);
 
     // Compact inline + Add account picker.
@@ -194,26 +197,29 @@ fn list_page<'a>(
                 .size(p::TEXT_SM)
                 .color(t.semantic.text_secondary),
                 row![
-                    button(text("Claude").size(p::TEXT_SM))
-                        .padding([6.0, 12.0])
+                    button(container(text("Claude").size(p::TEXT_SM)).center_y(Length::Fill))
+                        .padding([0.0, 14.0])
+                        .height(Length::Fixed(p::TARGET_MIN_H))
                         .style(move |_, status| t.quiet_button_style(false, status))
                         .on_press_maybe(can_add.then_some(UiMessage::AddAccount(Service::Claude))),
-                    button(text("Codex").size(p::TEXT_SM))
-                        .padding([6.0, 12.0])
+                    button(container(text("Codex").size(p::TEXT_SM)).center_y(Length::Fill))
+                        .padding([0.0, 14.0])
+                        .height(Length::Fixed(p::TARGET_MIN_H))
                         .style(move |_, status| t.quiet_button_style(false, status))
                         .on_press_maybe(can_add.then_some(UiMessage::AddAccount(Service::Codex))),
                     space::horizontal(),
-                    button(text("Cancel").size(p::TEXT_SM))
-                        .padding([6.0, 10.0])
+                    button(container(text("Cancel").size(p::TEXT_SM)).center_y(Length::Fill))
+                        .padding([0.0, 12.0])
+                        .height(Length::Fixed(p::TARGET_MIN_H))
                         .style(move |_, status| t.ghost_button_style(status))
                         .on_press_maybe(can_add.then_some(UiMessage::ToggleAddPicker)),
                 ]
-                .spacing(6.0)
+                .spacing(8.0)
                 .align_y(Alignment::Center),
             ]
-            .spacing(6.0),
+            .spacing(8.0),
         )
-        .padding([8.0, 10.0])
+        .padding([10.0, 12.0])
         .width(Length::Fill)
         .style(move |_| t.subtle_panel_style());
         root = root.push(picker);
@@ -227,15 +233,14 @@ fn list_page<'a>(
                     container(
                         text(format!("Update to v{ver}"))
                             .size(p::TEXT_SM)
-                            .font(Font {
-                                weight: font::Weight::Semibold,
-                                ..Font::DEFAULT
-                            }),
+                            .font(ui_font(font::Weight::Semibold)),
                     )
-                    .center_x(Length::Fill),
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill),
                 )
-                .padding([7.0, 12.0])
+                .padding([0.0, 12.0])
                 .width(Length::Fill)
+                .height(Length::Fixed(p::TARGET_MIN_H))
                 .style(move |_, status| t.primary_button_style(status))
                 .on_press(UiMessage::OpenUrl(UrlTarget::GitHubReleases)),
             );
@@ -252,49 +257,65 @@ fn list_page<'a>(
         "Pin"
     };
     let footer = row![
-        button(text("+ Add account").size(p::TEXT_SM))
-            .padding([6.0, 9.0])
-            .style(move |_, status| t.quiet_button_style(ui.add_picker_open, status))
-            .on_press_maybe(can_add.then_some(UiMessage::ToggleAddPicker)),
+        button(
+            container(text("+ Add account").size(p::TEXT_SM).font(ui_font(font::Weight::Medium)))
+                .center_y(Length::Fill),
+        )
+        .padding([0.0, 10.0])
+        .height(Length::Fixed(36.0))
+        .style(move |_, status| t.quiet_button_style(ui.add_picker_open, status))
+        .on_press_maybe(can_add.then_some(UiMessage::ToggleAddPicker)),
         space::horizontal(),
         button(
-            row![
-                icons::tinted_svg(icons::PIN_SVG, 13.0, t.semantic.text_secondary),
-                text(pin_label).size(p::TEXT_SM),
-            ]
-            .spacing(4.0)
-            .align_y(Alignment::Center),
+            container(
+                row![
+                    icons::tinted_svg(icons::PIN_SVG, 13.0, t.semantic.text_secondary),
+                    text(pin_label).size(p::TEXT_SM),
+                ]
+                .spacing(5.0)
+                .align_y(Alignment::Center),
+            )
+            .center_y(Length::Fill),
         )
-        .padding([6.0, 9.0])
+        .padding([0.0, 10.0])
+        .height(Length::Fixed(36.0))
         .style(move |_, status| t.quiet_button_style(settings.pill_locked, status))
         .on_press(UiMessage::TogglePin),
         button(
-            row![
-                icons::tinted_svg(icons::HELP_SVG, 13.0, t.semantic.text_secondary),
-                text("FAQ").size(p::TEXT_SM),
-            ]
-            .spacing(4.0)
-            .align_y(Alignment::Center),
+            container(
+                row![
+                    icons::tinted_svg(icons::HELP_SVG, 13.0, t.semantic.text_secondary),
+                    text("FAQ").size(p::TEXT_SM),
+                ]
+                .spacing(5.0)
+                .align_y(Alignment::Center),
+            )
+            .center_y(Length::Fill),
         )
-        .padding([6.0, 9.0])
+        .padding([0.0, 10.0])
+        .height(Length::Fixed(36.0))
         .style(move |_, status| t.ghost_button_style(status))
         .on_press(UiMessage::OpenPage(Page::Faq)),
         button(
-            row![
-                icons::tinted_svg(icons::SLIDERS_SVG, 13.0, t.semantic.text_secondary),
-                text("Settings").size(p::TEXT_SM),
-            ]
-            .spacing(4.0)
-            .align_y(Alignment::Center),
+            container(
+                row![
+                    icons::tinted_svg(icons::SLIDERS_SVG, 13.0, t.semantic.text_secondary),
+                    text("Settings").size(p::TEXT_SM),
+                ]
+                .spacing(5.0)
+                .align_y(Alignment::Center),
+            )
+            .center_y(Length::Fill),
         )
-        .padding([6.0, 9.0])
+        .padding([0.0, 10.0])
+        .height(Length::Fixed(36.0))
         .style(move |_, status| t.ghost_button_style(status))
         .on_press(UiMessage::OpenPage(Page::Settings)),
     ]
-    .spacing(4.0)
+    .spacing(6.0)
     .align_y(Alignment::Center);
 
-    root.push(footer).into()
+    root.height(Length::Fill).push(footer).into()
 }
 
 pub fn view<'a>(

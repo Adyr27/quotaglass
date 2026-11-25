@@ -262,12 +262,16 @@ pub fn view<'a>(
             .align_y(Alignment::Center)
             .into()
     } else {
-        let grip_w = (pad_h).max(7.0);
-        let grip_h = 20.0 * scale;
+        // Reserve clean breathing space between the rightmost ring and the 3-dot grip,
+        // keeping exact horizontal sum == 2 * PILL_PAD * scale at every scale (0.85..=2.0).
+        let right_left_pad = space().width(Length::Fixed((PILL_PAD as f32 - 1.0) * scale));
+        let grip_gap = space().width(Length::Fixed(4.0 * scale));
+        let grip_w = 7.0 * scale;
+        let grip_h = 22.0 * scale;
         let dot_alpha = if ui.grip_hovered {
-            0.92
+            0.94
         } else if ui.pill_hovered {
-            0.55
+            0.62
         } else {
             0.0
         };
@@ -278,7 +282,7 @@ pub fn view<'a>(
                     ..tokens.semantic.grip_dot
                 },
                 visible: ui.pill_hovered || ui.grip_hovered,
-                dot_radius: (1.2 * scale).clamp(0.9, 2.0),
+                dot_radius: (1.25 * scale).clamp(1.0, 2.3),
             })
             .width(Length::Fixed(grip_w))
             .height(Length::Fixed(grip_h)),
@@ -288,7 +292,7 @@ pub fn view<'a>(
         .on_press(UiMessage::PillGripPressed)
         .interaction(mouse::Interaction::ResizingHorizontally);
 
-        row![left_pad, slots_row, grip]
+        row![right_left_pad, slots_row, grip_gap, grip]
             .align_y(Alignment::Center)
             .into()
     };
@@ -299,11 +303,29 @@ pub fn view<'a>(
         .align_y(Alignment::Center)
         .style({
             let tokens = *tokens;
-            move |_| tokens.pill_container_style(scale)
+            move |_| tokens.pill_container_style()
         });
 
     MouseArea::new(capsule)
         .on_enter(UiMessage::PillHovered(true))
         .on_exit(UiMessage::PillHovered(false))
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::settings::PILL_SCALE;
+    use crate::win32::{pill_px_size, PILL_H};
+
+    #[test]
+    fn pill_scales_and_slots_stay_proportional_from_085_to_200() {
+        for scale in [PILL_SCALE.0, 1.0, 1.5, PILL_SCALE.1] {
+            for slots in 1u32..=3 {
+                let (w, h) = pill_px_size(slots, scale, 1.0);
+                let expected_h = (f64::from(PILL_H) * scale).round() as u32;
+                assert_eq!(h, expected_h);
+                assert!(w > h, "pill must remain horizontal capsule/rounded bar at scale={scale}, slots={slots}");
+            }
+        }
+    }
 }

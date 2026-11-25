@@ -3,7 +3,7 @@
 use crate::connect::UrlTarget;
 use crate::state::format_reset_time;
 use crate::ui::icons;
-use crate::ui::tokens::{primitives as p, DesignTokens};
+use crate::ui::tokens::{primitives as p, ui_font, DesignTokens};
 use crate::ui::{
     forecast_line, friendly_state_notice, resets_chip_text, sentence_case,
     sign_in_button_label, used_whole, UiMessage, UiState,
@@ -15,7 +15,7 @@ use iced::widget::canvas::{self, Path};
 use iced::widget::{
     button, column, container, row, rule, space, text, text_input, Canvas, MouseArea,
 };
-use iced::{Alignment, Color, Element, Font, Length, Point, Rectangle, Renderer, Size, Theme};
+use iced::{Alignment, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 use quotaglass_core::view::{AccountView, BucketView, Freshness};
 use quotaglass_core::Service;
 
@@ -164,14 +164,16 @@ fn reset_label(b: &BucketView, now_ms: i64) -> String {
     }
 }
 
-fn chip<'a>(label: String, style_fn: impl Fn(&Theme) -> container::Style + 'a, size: f32) -> Element<'a, UiMessage> {
-    container(text(label).size(size).font(Font {
-        weight: font::Weight::Medium,
-        ..Font::DEFAULT
-    }))
-    .padding([2.0, 7.0])
-    .style(style_fn)
-    .into()
+fn chip<'a>(
+    label: String,
+    style_fn: impl Fn(&Theme) -> container::Style + 'a,
+    size: f32,
+    weight: font::Weight,
+) -> Element<'a, UiMessage> {
+    container(text(label).size(size).font(ui_font(weight)))
+        .padding([2.0, 8.0])
+        .style(style_fn)
+        .into()
 }
 
 pub fn skeleton_card<'a>(tokens: &DesignTokens, phase: f32) -> Element<'a, UiMessage> {
@@ -231,16 +233,13 @@ pub fn view<'a>(
         .unwrap_or_else(|| "—".to_string());
 
     let mut title_row = row![
-        icons::provider_icon(account.service, 15.0, accent),
+        icons::provider_icon(account.service, 16.0, accent),
         text(account.label.clone())
             .size(p::TEXT_MD)
-            .font(Font {
-                weight: font::Weight::Semibold,
-                ..Font::DEFAULT
-            })
+            .font(ui_font(font::Weight::Semibold))
             .color(t.semantic.text_primary),
     ]
-    .spacing(6.0)
+    .spacing(7.0)
     .align_y(Alignment::Center);
 
     if let Some(plan) = &account.plan {
@@ -250,6 +249,7 @@ pub fn view<'a>(
                 label,
                 move |_| t.plan_chip_style(),
                 p::TEXT_XS,
+                font::Weight::Medium,
             ));
         }
     }
@@ -259,6 +259,7 @@ pub fn view<'a>(
             "Best now".to_string(),
             move |_| t.best_chip_style(),
             p::TEXT_XS,
+            font::Weight::Semibold,
         ));
     }
 
@@ -268,6 +269,7 @@ pub fn view<'a>(
             resets_chip_text(count),
             move |_| t.chip_style(t.semantic.surface_control, t.semantic.text_primary, t.semantic.border_subtle),
             p::TEXT_XS,
+            font::Weight::Medium,
         ));
     }
 
@@ -277,7 +279,7 @@ pub fn view<'a>(
         } else {
             icons::CHEVRON_DOWN_SVG
         },
-        13.0,
+        14.0,
         t.semantic.text_muted,
     );
 
@@ -286,10 +288,7 @@ pub fn view<'a>(
         space::horizontal(),
         text(pct_text)
             .size(p::TEXT_MD)
-            .font(Font {
-                weight: font::Weight::Semibold,
-                ..Font::DEFAULT
-            })
+            .font(ui_font(font::Weight::Semibold))
             .color(t.semantic.text_primary),
         chevron,
     ]
@@ -300,7 +299,7 @@ pub fn view<'a>(
 
     if !expanded {
         if let Some(b) = headline {
-            header_col = header_col.push(pace_strip(&t, account, b, 7.0, ui));
+            header_col = header_col.push(pace_strip(&t, account, b, 8.0, ui));
             let mut meta = row![text(b.name.clone()).size(p::TEXT_XS).color(t.semantic.text_muted)]
                 .spacing(6.0)
                 .align_y(Alignment::Center);
@@ -314,7 +313,8 @@ pub fn view<'a>(
                 meta = meta.push(chip(
                     "fast burn".to_string(),
                     move |_| t.burn_chip_style(),
-                    10.5,
+                    p::TEXT_XS,
+                    font::Weight::Semibold,
                 ));
             }
             header_col = header_col.push(meta);
@@ -328,7 +328,7 @@ pub fn view<'a>(
             | quotaglass_core::view::CardState::Error => t.semantic.warn,
             _ => t.semantic.text_secondary,
         };
-        header_col = header_col.push(text(notice).size(p::TEXT_SM).color(notice_color));
+        header_col = header_col.push(text(notice).size(p::TEXT_SM).line_height(1.3).color(notice_color));
     }
 
     let clickable_header: Element<'a, UiMessage> = MouseArea::new(header_col)
@@ -343,7 +343,7 @@ pub fn view<'a>(
 
         // All buckets with full pace strips.
         if !account.buckets.is_empty() {
-            let mut buckets_col = column![].spacing(9.0);
+            let mut buckets_col = column![].spacing(10.0);
             for b in &account.buckets {
                 let mut foot = row![text(reset_label(b, now_ms))
                     .size(p::TEXT_XS)
@@ -359,7 +359,8 @@ pub fn view<'a>(
                     foot = foot.push(chip(
                         "fast burn".to_string(),
                         move |_| t.burn_chip_style(),
-                        10.5,
+                        p::TEXT_XS,
+                        font::Weight::Semibold,
                     ));
                 }
 
@@ -372,17 +373,14 @@ pub fn view<'a>(
                             space::horizontal(),
                             text(format!("{}%", used_whole(b.used_percent)))
                                 .size(p::TEXT_SM)
-                                .font(Font {
-                                    weight: font::Weight::Semibold,
-                                    ..Font::DEFAULT
-                                })
+                                .font(ui_font(font::Weight::Semibold))
                                 .color(t.semantic.text_primary),
                         ]
                         .align_y(Alignment::Center),
                         pace_strip(&t, account, b, 9.0, ui),
                         foot,
                     ]
-                    .spacing(4.0),
+                    .spacing(5.0),
                 );
             }
             card_body = card_body.push(buckets_col);
@@ -404,10 +402,7 @@ pub fn view<'a>(
                     let mut reset_row = row![
                         text(resets_chip_text(count))
                             .size(p::TEXT_SM)
-                            .font(Font {
-                                weight: font::Weight::Medium,
-                                ..Font::DEFAULT
-                            })
+                            .font(ui_font(font::Weight::Medium))
                             .color(t.semantic.text_primary),
                         space::horizontal(),
                     ]
@@ -415,23 +410,27 @@ pub fn view<'a>(
                     if count > 0 {
                         reset_row = reset_row.push(
                             button(
-                                row![
-                                    text("Redeem").size(p::TEXT_SM),
-                                    icons::tinted_svg(
-                                        icons::EXTERNAL_SVG,
-                                        12.0,
-                                        t.semantic.primary_ink,
-                                    ),
-                                ]
-                                .spacing(4.0)
-                                .align_y(Alignment::Center),
+                                container(
+                                    row![
+                                        text("Redeem").size(p::TEXT_SM).font(ui_font(font::Weight::Medium)),
+                                        icons::tinted_svg(
+                                            icons::EXTERNAL_SVG,
+                                            12.0,
+                                            t.semantic.primary_ink,
+                                        ),
+                                    ]
+                                    .spacing(5.0)
+                                    .align_y(Alignment::Center),
+                                )
+                                .center_y(Length::Fill),
                             )
-                            .padding([5.0, 10.0])
+                            .padding([0.0, 12.0])
+                            .height(Length::Fixed(36.0))
                             .style(move |_, status| t.primary_button_style(status))
                             .on_press(UiMessage::OpenUrl(UrlTarget::OpenAiUsage)),
                         );
                     }
-                    let mut reset_col = column![reset_row].spacing(4.0);
+                    let mut reset_col = column![reset_row].spacing(5.0);
                     if count > 0 {
                         reset_col = reset_col.push(
                             text("Check what this reset restores before you use it.")
@@ -441,7 +440,7 @@ pub fn view<'a>(
                     }
                     card_body = card_body.push(
                         container(reset_col)
-                            .padding([8.0, 10.0])
+                            .padding([9.0, 10.0])
                             .width(Length::Fill)
                             .style(move |_| t.subtle_panel_style()),
                     );
@@ -451,18 +450,22 @@ pub fn view<'a>(
                 card_body = card_body.push(
                     row![
                         button(
-                            row![
-                                text("Check limit resets").size(p::TEXT_SM),
-                                icons::tinted_svg(
-                                    icons::EXTERNAL_SVG,
-                                    12.0,
-                                    t.semantic.text_secondary,
-                                ),
-                            ]
-                            .spacing(5.0)
-                            .align_y(Alignment::Center),
+                            container(
+                                row![
+                                    text("Check limit resets").size(p::TEXT_SM),
+                                    icons::tinted_svg(
+                                        icons::EXTERNAL_SVG,
+                                        12.0,
+                                        t.semantic.text_secondary,
+                                    ),
+                                ]
+                                .spacing(5.0)
+                                .align_y(Alignment::Center),
+                            )
+                            .center_y(Length::Fill),
                         )
-                        .padding([5.0, 10.0])
+                        .padding([0.0, 12.0])
+                        .height(Length::Fixed(36.0))
                         .style(move |_, status| t.quiet_button_style(false, status))
                         .on_press(UiMessage::OpenUrl(UrlTarget::ClaudeUsage)),
                         space::horizontal(),
@@ -480,21 +483,24 @@ pub fn view<'a>(
                         .on_input(UiMessage::RenameDraftChanged)
                         .on_submit(UiMessage::SubmitRename)
                         .size(p::TEXT_SM)
-                        .padding([6.0, 8.0])
+                        .padding([7.0, 10.0])
+                        .width(Length::Fill)
                         .style(move |_, status| t.text_input_style(status)),
-                    button(text("Save").size(p::TEXT_SM))
-                        .padding([6.0, 10.0])
+                    button(container(text("Save").size(p::TEXT_SM)).center_y(Length::Fill))
+                        .padding([0.0, 12.0])
+                        .height(Length::Fixed(36.0))
                         .style(move |_, status| t.primary_button_style(status))
                         .on_press(UiMessage::SubmitRename),
-                    button(text("Cancel").size(p::TEXT_SM))
-                        .padding([6.0, 8.0])
+                    button(container(text("Cancel").size(p::TEXT_SM)).center_y(Length::Fill))
+                        .padding([0.0, 10.0])
+                        .height(Length::Fixed(36.0))
                         .style(move |_, status| t.quiet_button_style(false, status))
                         .on_press(UiMessage::CancelRename),
                 ]
                 .spacing(6.0)
                 .align_y(Alignment::Center),
             ]
-            .spacing(4.0);
+            .spacing(5.0);
             if let Some(err) = draft.error {
                 rename_col = rename_col.push(text(err).size(p::TEXT_XS).color(t.semantic.danger));
             }
@@ -516,22 +522,27 @@ pub fn view<'a>(
                         .color(t.semantic.text_primary),
                     row![
                         button(
-                            text(if removing { "Removing..." } else { "Confirm remove" })
-                                .size(p::TEXT_SM),
+                            container(
+                                text(if removing { "Removing..." } else { "Confirm remove" })
+                                    .size(p::TEXT_SM),
+                            )
+                            .center_y(Length::Fill),
                         )
-                        .padding([6.0, 10.0])
+                        .padding([0.0, 12.0])
+                        .height(Length::Fixed(36.0))
                         .style(move |_, status| t.danger_button_style(status))
                         .on_press_maybe((!removing).then(|| UiMessage::ConfirmRemove(account.id.clone()))),
-                        button(text("Cancel").size(p::TEXT_SM))
-                            .padding([6.0, 10.0])
+                        button(container(text("Cancel").size(p::TEXT_SM)).center_y(Length::Fill))
+                            .padding([0.0, 12.0])
+                            .height(Length::Fixed(36.0))
                             .style(move |_, status| t.quiet_button_style(false, status))
                             .on_press_maybe((!removing).then_some(UiMessage::CancelRemove)),
                     ]
-                    .spacing(6.0),
+                    .spacing(8.0),
                 ]
                 .spacing(8.0),
             )
-            .padding([8.0, 10.0])
+            .padding([10.0, 12.0])
             .width(Length::Fill)
             .style(move |_| t.danger_panel_style());
             card_body = card_body.push(confirm_box);
@@ -540,12 +551,20 @@ pub fn view<'a>(
             let refresh_busy = !ui.pending.can_refresh();
             let signing_in = ui.pending.is_signing_in(&account.id);
             let mut action_row = row![
-                button(text(if refresh_busy { "Refreshing..." } else { "Refresh" }).size(p::TEXT_SM))
-                    .padding([5.0, 9.0])
-                    .style(move |_, status| t.quiet_button_style(false, status))
-                    .on_press_maybe((!refresh_busy).then_some(UiMessage::RefreshNow)),
-                button(text("Rename").size(p::TEXT_SM))
-                    .padding([5.0, 9.0])
+                button(
+                    container(
+                        text(if refresh_busy { "Refreshing..." } else { "Refresh" })
+                            .size(p::TEXT_SM),
+                    )
+                    .center_y(Length::Fill),
+                )
+                .padding([0.0, 11.0])
+                .height(Length::Fixed(36.0))
+                .style(move |_, status| t.quiet_button_style(false, status))
+                .on_press_maybe((!refresh_busy).then_some(UiMessage::RefreshNow)),
+                button(container(text("Rename").size(p::TEXT_SM)).center_y(Length::Fill))
+                    .padding([0.0, 11.0])
+                    .height(Length::Fixed(36.0))
                     .style(move |_, status| t.quiet_button_style(false, status))
                     .on_press(UiMessage::StartRename(account.id.clone())),
             ]
@@ -559,8 +578,9 @@ pub fn view<'a>(
                     sign_label
                 };
                 action_row = action_row.push(
-                    button(text(btn_text).size(p::TEXT_SM))
-                        .padding([5.0, 9.0])
+                    button(container(text(btn_text).size(p::TEXT_SM)).center_y(Length::Fill))
+                        .padding([0.0, 11.0])
+                        .height(Length::Fixed(36.0))
                         .style(move |_, status| t.primary_button_style(status))
                         .on_press_maybe((!signing_in).then(|| UiMessage::SignInAccount(account.id.clone()))),
                 );
@@ -570,17 +590,25 @@ pub fn view<'a>(
 
             if account.profile_id.is_some() {
                 action_row = action_row.push(
-                    button(text(if removing { "Removing..." } else { "Remove" }).size(p::TEXT_SM))
-                        .padding([5.0, 9.0])
-                        .style(move |_, status| t.danger_button_style(status))
-                        .on_press_maybe(
-                            (!removing).then(|| UiMessage::RequestRemove(account.id.clone())),
-                        ),
+                    button(
+                        container(
+                            text(if removing { "Removing..." } else { "Remove" })
+                                .size(p::TEXT_SM),
+                        )
+                        .center_y(Length::Fill),
+                    )
+                    .padding([0.0, 11.0])
+                    .height(Length::Fixed(36.0))
+                    .style(move |_, status| t.danger_button_style(status))
+                    .on_press_maybe(
+                        (!removing).then(|| UiMessage::RequestRemove(account.id.clone())),
+                    ),
                 );
             } else {
                 action_row = action_row.push(
-                    button(text("Hide").size(p::TEXT_SM))
-                        .padding([5.0, 9.0])
+                    button(container(text("Hide").size(p::TEXT_SM)).center_y(Length::Fill))
+                        .padding([0.0, 11.0])
+                        .height(Length::Fixed(36.0))
                         .style(move |_, status| t.quiet_button_style(false, status))
                         .on_press(UiMessage::HideAccount(account.id.clone())),
                 );

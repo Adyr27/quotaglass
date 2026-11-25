@@ -3,21 +3,18 @@
 
 use crate::scheduler::Detected;
 use crate::settings::{Connection, GlassMode, Settings, Theme, ToastSound};
-use crate::ui::tokens::{primitives as p, DesignTokens};
+use crate::ui::tokens::{primitives as p, ui_font, DesignTokens};
 use crate::ui::{connection_name, icons, segmented_row, service_name, UiMessage};
 use iced::font;
 use iced::widget::{button, column, container, row, rule, scrollable, space, text, toggler};
-use iced::{Alignment, Element, Font, Length};
+use iced::{Alignment, Element, Length, Padding};
 use quotaglass_core::view::AccountView;
 use quotaglass_core::Service;
 
 fn section_heading<'a>(tokens: &DesignTokens, title: &'static str) -> Element<'a, UiMessage> {
     text(title)
         .size(p::TEXT_SM)
-        .font(Font {
-            weight: font::Weight::Semibold,
-            ..Font::DEFAULT
-        })
+        .font(ui_font(font::Weight::Semibold))
         .color(tokens.semantic.text_secondary)
         .into()
 }
@@ -30,10 +27,15 @@ fn setting_row<'a>(
 ) -> Element<'a, UiMessage> {
     let mut left = column![text(label).size(p::TEXT_BASE).color(tokens.semantic.text_primary)].spacing(2.0);
     if let Some(note_text) = note {
-        left = left.push(text(note_text).size(p::TEXT_XS).color(tokens.semantic.text_muted));
+        left = left.push(
+            text(note_text)
+                .size(p::TEXT_XS)
+                .line_height(1.3)
+                .color(tokens.semantic.text_muted),
+        );
     }
     row![left.width(Length::Fill), control]
-        .spacing(10.0)
+        .spacing(12.0)
         .align_y(Alignment::Center)
         .into()
 }
@@ -62,28 +64,27 @@ pub fn view<'a>(
             container(
                 row![
                     icons::tinted_svg(icons::BACK_SVG, 14.0, t.semantic.text_primary),
-                    text("Back").size(p::TEXT_SM),
+                    text("Back").size(p::TEXT_SM).font(ui_font(font::Weight::Medium)),
                 ]
-                .spacing(4.0)
+                .spacing(5.0)
                 .align_y(Alignment::Center),
             )
             .center_y(Length::Fill),
         )
-        .padding([0.0, 10.0])
+        .padding([0.0, 12.0])
         .height(Length::Fixed(p::TARGET_MIN_H))
         .style(move |_, status| t.quiet_button_style(false, status))
         .on_press(UiMessage::BackToList),
         text("Settings")
             .size(p::TEXT_LG)
-            .font(Font {
-                weight: font::Weight::Semibold,
-                ..Font::DEFAULT
-            })
+            .font(ui_font(font::Weight::Semibold))
             .color(t.semantic.text_primary),
         space::horizontal(),
     ]
     .spacing(10.0)
     .align_y(Alignment::Center);
+
+    let glass_note = (!t.semantic.os_glass).then_some("Solid when Windows transparency is off.");
 
     let appearance_group = container(
         column![
@@ -105,7 +106,7 @@ pub fn view<'a>(
             setting_row(
                 &t,
                 "Glass",
-                Some("Solid when Windows transparency is off."),
+                glass_note,
                 segmented_row(
                     t,
                     &[
@@ -133,6 +134,7 @@ pub fn view<'a>(
                 "Always on top",
                 None,
                 toggler(settings.always_on_top)
+                    .size(22.0)
                     .on_toggle(UiMessage::SetAlwaysOnTop)
                     .style(move |_, status| t.toggler_style(status))
                     .into(),
@@ -142,6 +144,7 @@ pub fn view<'a>(
                 "Start with Windows",
                 None,
                 toggler(settings.autostart)
+                    .size(22.0)
                     .on_toggle(UiMessage::SetAutostart)
                     .style(move |_, status| t.toggler_style(status))
                     .into(),
@@ -151,21 +154,24 @@ pub fn view<'a>(
                 "Check for updates",
                 Some("Once a day, from GitHub. Nothing else is sent."),
                 toggler(settings.check_updates)
+                    .size(22.0)
                     .on_toggle(UiMessage::SetCheckUpdates)
                     .style(move |_, status| t.toggler_style(status))
                     .into(),
             ),
         ]
-        .spacing(10.0),
+        .spacing(12.0),
     )
-    .padding(10.0)
+    .padding(12.0)
     .width(Length::Fill)
     .style(move |_| t.subtle_panel_style());
 
     let toasts = &settings.reset_toasts;
     let service_toggle = |svc: Service, enabled: bool| {
         let master = toasts.enabled;
-        let mut tog = toggler(enabled).style(move |_, status| t.toggler_style(status));
+        let mut tog = toggler(enabled)
+            .size(22.0)
+            .style(move |_, status| t.toggler_style(status));
         if master {
             tog = tog.on_toggle(move |v| UiMessage::SetResetToastService(svc, v));
         }
@@ -179,6 +185,7 @@ pub fn view<'a>(
                 "Reset reminders",
                 Some("Notify when a limit window resets."),
                 toggler(toasts.enabled)
+                    .size(22.0)
                     .on_toggle(UiMessage::SetResetToastsEnabled)
                     .style(move |_, status| t.toggler_style(status))
                     .into(),
@@ -201,13 +208,13 @@ pub fn view<'a>(
                 ),
             ),
         ]
-        .spacing(9.0),
+        .spacing(11.0),
     )
-    .padding(10.0)
+    .padding(12.0)
     .width(Length::Fill)
     .style(move |_| t.subtle_panel_style());
 
-    let mut sources_col = column![].spacing(9.0);
+    let mut sources_col = column![].spacing(11.0);
     for conn in [
         Connection::ClaudeCurrent,
         Connection::CodexCurrent,
@@ -222,14 +229,16 @@ pub fn view<'a>(
             _ if !found && !on => Some("Not signed in on this PC."),
             _ => None,
         };
-        let mut tog = toggler(on).style(move |_, status| t.toggler_style(status));
+        let mut tog = toggler(on)
+            .size(22.0)
+            .style(move |_, status| t.toggler_style(status));
         if on || found {
             tog = tog.on_toggle(move |v| UiMessage::ToggleSource(conn, v));
         }
         sources_col = sources_col.push(setting_row(&t, connection_name(conn), note, tog.into()));
     }
     let sources_group = container(sources_col)
-        .padding(10.0)
+        .padding(12.0)
         .width(Length::Fill)
         .style(move |_| t.subtle_panel_style());
 
@@ -250,8 +259,9 @@ pub fn view<'a>(
                         .size(p::TEXT_SM)
                         .color(t.semantic.text_primary)
                         .width(Length::Fill),
-                    button(text("Unhide").size(p::TEXT_SM))
-                        .padding([5.0, 10.0])
+                    button(container(text("Unhide").size(p::TEXT_SM)).center_y(Length::Fill))
+                        .padding([0.0, 12.0])
+                        .height(Length::Fixed(36.0))
                         .style(move |_, status| t.quiet_button_style(false, status))
                         .on_press(UiMessage::UnhideAccount(id)),
                 ]
@@ -270,8 +280,9 @@ pub fn view<'a>(
                         .size(p::TEXT_SM)
                         .color(t.semantic.text_muted)
                         .width(Length::Fill),
-                    button(text("Unhide").size(p::TEXT_SM))
-                        .padding([5.0, 10.0])
+                    button(container(text("Unhide").size(p::TEXT_SM)).center_y(Length::Fill))
+                        .padding([0.0, 12.0])
+                        .height(Length::Fixed(36.0))
                         .style(move |_, status| t.quiet_button_style(false, status))
                         .on_press(UiMessage::UnhideAccount(id_owned)),
                 ]
@@ -281,11 +292,11 @@ pub fn view<'a>(
         }
     }
     let hidden_group = container(hidden_col)
-        .padding(10.0)
+        .padding(12.0)
         .width(Length::Fill)
         .style(move |_| t.subtle_panel_style());
 
-    let scroll_body = scrollable(
+    let scroll_content = container(
         column![
             appearance_group,
             section_heading(&t, "Reset reminders"),
@@ -297,10 +308,13 @@ pub fn view<'a>(
         ]
         .spacing(10.0),
     )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .spacing(4.0)
-    .style(move |_, status| t.scrollable_style(status));
+    .padding(Padding::ZERO.right(10.0).bottom(10.0));
+
+    let scroll_body = scrollable(scroll_content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .spacing(4.0)
+        .style(move |_, status| t.scrollable_style(status));
 
     column![
         header,

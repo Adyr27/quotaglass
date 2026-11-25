@@ -12,7 +12,7 @@ use std::path::PathBuf;
 /// Kept at 4 for clean v0.4.0 Tauri rollback compatibility.
 pub const SETTINGS_VERSION: u32 = 4;
 /// The pill's smallest and largest scale.
-pub const PILL_SCALE: (f64, f64) = (0.65, 1.6);
+pub const PILL_SCALE: (f64, f64) = (0.85, 2.0);
 pub const MAX_LABEL_CHARS: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -673,6 +673,19 @@ mod tests {
         store.save(&s).unwrap();
         assert_eq!(store.load(), s);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pill_scale_bounds_enforce_085_to_200() {
+        assert_eq!(PILL_SCALE, (0.85, 2.0));
+        assert_eq!(clamp_scale(0.5), 0.85);
+        assert_eq!(clamp_scale(0.65), 0.85);
+        assert_eq!(clamp_scale(0.85), 0.85);
+        assert_eq!(clamp_scale(1.0), 1.0);
+        assert_eq!(clamp_scale(2.0), 2.0);
+        assert_eq!(clamp_scale(2.5), 2.0);
+        assert_eq!(clamp_scale(f64::NAN), 1.0);
+        assert_eq!(clamp_scale(f64::INFINITY), 1.0);
     }
 
     #[test]

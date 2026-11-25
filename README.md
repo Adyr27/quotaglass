@@ -1,111 +1,105 @@
 # QuotaGlass
 
-QuotaGlass is a Windows desktop widget that shows plan-limit usage for Claude, Codex and Antigravity. It sits on the desktop as a small pill with one icon per service. Provider names and icons identify the service only. They do not imply endorsement by Anthropic, OpenAI or Google, and the marks belong to their owners.
+QuotaGlass is a Windows desktop widget that tracks plan-limit usage for Claude, Codex, and Antigravity. It sits on your desktop as a small pill with one icon per service. Provider names and marks identify the service only; they don't imply endorsement by Anthropic, OpenAI, or Google, and belong to their owners.
 
-## The pill
+## The pill and popover
 
-- Each icon sits inside a thin ring. The ring fills with the percent used of the best account of that service, the one with the most room left. The ring turns amber from 80 percent and red when every account of the service is at 100 percent. A dashed, empty ring means there is no reading.
-- Hover an icon to see an overlay with every account of that service and each limit: bar, percent, window length and reset time. The overlay is read-only and never takes focus.
-- Click an icon, or press Enter on it, to open the popover. It lists the accounts of every service. Select an account to refresh, rename, hide, remove or sign in again. The footer has "+ Add account", Pin and Settings. Esc or a click outside closes it.
-- Tab moves between icons. The tray menu has "Focus QuotaGlass".
-- Drag the pill by any icon. A short click still opens the popover. Drag the grip at the right end to resize the pill. The size and place are remembered.
-- Pin (tray menu or popover footer) locks the pill: no drag, no resize. The place is restored at the next start.
-- The pill stays above the taskbar. It hides while a full-screen app or game runs, and returns afterwards. If you hid it from the tray, it stays hidden.
+- Each service icon sits inside a thin ring filled to the percentage used on that service's best account (the one with the most room left). The ring turns amber at 80 percent and red when every account for that service reaches 100 percent; a dashed, empty ring means there is no reading yet.
+- Click any icon on the pill to open the compact popover (there is no hover overlay). Provider tabs (`All`, `Claude`, `Codex`, `Antigravity`) and a 1-click `Refresh` button sit across the top, while the footer holds `+ Add account`, `Pin`, `FAQ`, and `Settings`. Press `Esc` or click outside to close it.
+- Click an account card inside the popover to expand every limit, inline reset actions (Codex banked resets with `Redeem`, Claude `Check limit resets`), and controls to refresh, rename, hide, remove (with 2-step confirmation), or sign in again.
+- While unpinned, drag the pill by any icon to move it; a short click still opens the popover. Drag the grip at the right edge to resize the pill between `0.85x` and `2.0x`.
+- `Pin` (in the popover footer or the tray menu) locks the pill against dragging and resizing and saves a taskbar-relative anchor per monitor setup, so it returns to the taskbar when you switch displays.
+- The pill stays above the taskbar, hides while a full-screen app or game runs, and comes back afterwards. If you hide it from the tray menu, it stays hidden until you bring it back. The tray menu also gives quick access to `Focus QuotaGlass`, `Pin pill`, `Refresh now`, and `Settings`.
 
 ## Pace strip
 
-Each limit shows a pace strip. The solid fill is the percentage of the limit used. A marker shows the share of the time window that has passed. When usage runs ahead of time (`used >= 1.5 x passed` and `used >= 20`), the strip shows "fast burn" in red.
+Each limit has a pace strip where the solid fill shows the percent used and a vertical marker shows how much of the time window has passed. When usage runs ahead of time (`used >= 1.5 x passed` and `used >= 20`), the strip flags `fast burn` in red.
 
-"Best now" marks the account with the most room left across its limits. If accounts tie on room left, the one whose worst limit resets sooner wins. This mark appears when at least two accounts of a service are readable.
+`Best now` marks the account with the most room left across its limits. If two accounts tie on room left, the one whose worst limit resets sooner wins; the badge appears whenever at least two accounts of a service are readable.
 
 ## Accounts
 
-Nothing is read until the person connects a source on the first screen.
+Nothing is read until you connect a source on the first screen.
 
 - "Use my current Claude login" and "Use my current Codex login" read `~/.claude` and `~/.codex` read-only.
-- "+ Add account" makes a profile folder in `%APPDATA%\QuotaGlass\profiles\<id>` and opens the real CLI sign-in in a console.
-- Remove signs that profile out on this PC and deletes its folder.
-- The current CLI login cannot be removed; it can only be hidden.
+- `+ Add account` creates a profile folder under `%APPDATA%\QuotaGlass\profiles\<id>` and opens the real CLI sign-in in a console window.
+- Removing an added account asks for confirmation, signs that profile out on this PC, and deletes its profile folder.
+- Your current CLI login can't be removed; you can only hide it.
 
 ## Antigravity
 
-Antigravity quota is read from the running Antigravity app's local server on this PC (`127.0.0.1`), only while the app is open. No Google sign-in is used.
+Antigravity quota is read from the local Antigravity server on this PC (`127.0.0.1`) while Antigravity is running. If Antigravity is closed, QuotaGlass keeps the last reading visible until you open it again. No Google sign-in is used.
 
 ## Warnings and reset reminders
 
-Usage warnings fire at 50, 80 and 90 percent, once per limit window, stored in `%APPDATA%\QuotaGlass\warnings.json`.
+Usage warnings fire at 50, 80, and 90 percent, once per limit window, and are saved in `%APPDATA%\QuotaGlass\warnings.json`. The 50 and 80 percent warnings are silent Windows toasts; the 90 percent toast plays a sound and notes when a Codex banked reset is available.
 
-- The 50 and 80 percent warnings are silent toasts.
-- The 90 percent toast plays a sound. It is a normal toast (the notification plugin cannot keep it on screen).
-
-Reset reminders are off by default. Turn them on in Settings. A toast tells you when a limit window has reset. There is a switch for each service, and the sound can be Default or Silent. Pending resets are stored in `%APPDATA%\QuotaGlassesets.json`. A reset that is more than 15 minutes late when the app starts gets no toast. Focus Assist or Do Not Disturb can mute the sound. Clicking a toast opens the popover for that service, but only while the toast is still on screen.
+Reset reminders start off by default, and you can turn them on in Settings. They send a toast when a limit window resets or when a Codex banked reset becomes available, with per-service switches and a `Default` or `Silent` sound option. Pending resets live in `%APPDATA%\QuotaGlass\resets.json`. Any reset that is more than 15 minutes late when QuotaGlass launches gets no toast, and Windows Focus Assist or Do Not Disturb can mute notification sounds. Clicking a toast opens the popover on that service while the toast is still on screen.
 
 ## Rate limits
 
-When Claude answers "too many requests", the account keeps its last reading and shows "Rate limited. Retrying in N min." in a neutral colour. Claude accounts are read at most every 5 minutes, whatever the refresh setting says. The wait after a rate limit is at most 15 minutes. Retry skips the wait.
+When Claude returns "too many requests", the account keeps its last reading and shows "Rate limited. Retrying in N min." in a neutral colour. Claude accounts are polled at most every 5 minutes regardless of the refresh setting, and multiple Claude accounts are staggered across the window so they don't burst together. The cooldown after a rate limit caps at 15 minutes; clicking `Refresh` skips the wait.
 
 ## Update checks
 
-Once a day, and at start, QuotaGlass asks GitHub whether a newer release exists. That is one request to `github.com/Adyr27/quotaglass`, answered from GitHub's release file servers; nothing about you or your accounts is sent with it. When a newer version exists, the popover footer shows "Update to vX.Y.Z". Nothing installs until you click it. The installer is signed with a key the app already knows, and the app refuses an update whose signature doesn't match. The check is on by default. Turn it off on the first screen or in Settings ("Check for updates"), and no update request leaves the PC. Because it is on by default, the first check can run before you reach that first screen.
+Once a day and at startup, QuotaGlass sends one anonymous HTTPS GET request to `api.github.com/repos/Adyr27/quotaglass/releases/latest` (nothing about you or your accounts is sent). When a newer release exists, the popover footer shows `Update to vX.Y.Z`, which opens the GitHub Releases page in your browser. QuotaGlass never downloads or installs binaries automatically. The check is on by default, and you can turn it off on the first screen or in Settings (`Check for updates`) so no update request leaves your PC.
 
 ## Window and settings
 
-Sizes follow Windows text size.
-
 Settings:
-- Theme (System, Light, Dark)
-- Glass (Acrylic, Mica, Clear)
+- Theme (`System`, `Light`, `Dark`)
+- Glass (`Liquid`, `Clear`, `Frosted`)
+- Refresh every `1`, `2`, or `5` min
 - Always on top (on by default)
 - Start with Windows
-- Refresh every 1, 2 or 5 min
 - Check for updates (on by default)
 - Reset reminders (on or off, per service, sound)
 - Sources
-- Account names
 - Hidden accounts
 
-Glass shows as a solid colour while Windows "Transparency effects" is off (Settings > Personalization > Colors). Mica looks nearly solid by design.
+Glass falls back to a solid surface when Windows "Transparency effects" is off (Settings > Personalization > Colors).
 
 ## Known limits
 
-The 5-minute Claude floor is a guess. Anthropic does not document the limits of this endpoint.
+The 5-minute Claude floor is a guess; Anthropic doesn't document the rate limits of that endpoint.
 
-A CLI installed under a folder whose path has `&`, `|`, `<`, `>`, `^`, `%`, `!`, `"`, `(`, or `)` is refused. This includes `C:\Program Files (x86)`. Normal npm installs work.
+A CLI installed under a folder whose path contains `&`, `|`, `<`, `>`, `^`, `%`, `!`, `"`, `(`, or `)` is refused, including `C:\Program Files (x86)`. Standard npm installs work.
 
 ## Privacy and safety
 
-- No emails or tokens in labels, logs or notifications. Settings keys hold a hash of the email, which is not anonymous.
-- Vendor login files are read-only.
-- Tokens are never refreshed.
-- No Windows Credential Manager or Google session use.
-- No telemetry, analytics or crash uploads. The only other request is the daily update check, which you can switch off.
-- The app writes only to `%APPDATA%\QuotaGlass\`: `settings.json` (window, look, sources, hidden accounts, names), `warnings.json`, `resets.json`, and `profiles\<id>\` (the CLI sign-ins that you add).
+- No emails or tokens appear in labels, logs, or notifications. Settings keys store a hash of the email rather than the address itself, though a hash isn't anonymous.
+- Vendor login files are opened read-only, and OAuth tokens are never refreshed.
+- No Windows Credential Manager or Google session access.
+- No telemetry, analytics, or crash uploads. Outside Anthropic, OpenAI, and localhost, the only network request is the daily GitHub Releases check, which you can switch off.
+- QuotaGlass writes only inside `%APPDATA%\QuotaGlass\`: `settings.json`, `readings.json`, `snapshot_cache.json`, `warnings.json`, `resets.json`, and `profiles\<id>\` (the CLI sign-ins you add).
 
 ## Install
 
-1. Download `QuotaGlass_<version>_x64-setup.exe` and `SHA256SUMS.txt` from the latest release.
-2. Open PowerShell in the download folder.
-3. Run `Get-FileHash .\QuotaGlass_*_x64-setup.exe -Algorithm SHA256`.
-4. Make sure that the hash matches the hash in `SHA256SUMS.txt`. If it is different, do not run the file.
-5. Run the installer.
+QuotaGlass ships as a portable single-file `.exe`. You don't need an installer or WebView2.
 
-The installer is not code-signed. Windows SmartScreen can show "Windows protected your PC". To continue, select **More info**, then **Run anyway**.
+1. Download `QuotaGlass_<version>_x64.exe` and `SHA256SUMS.txt` from the latest release.
+2. Open PowerShell in the download folder.
+3. Run `Get-FileHash .\QuotaGlass_*_x64.exe -Algorithm SHA256`.
+4. Confirm the hash matches `SHA256SUMS.txt`. If it doesn't match, delete the file and don't run it.
+5. Put `QuotaGlass_<version>_x64.exe` wherever you want to keep it and launch it.
+
+The binary isn't code-signed by Microsoft, so Windows SmartScreen may show "Windows protected your PC". Choose **More info**, then **Run anyway**.
 
 ## Build from source
 
 Prerequisites:
 - Windows 10 or 11, x64.
 - Rust stable for MSVC (`rustup default stable-x86_64-pc-windows-msvc`).
-- Visual Studio 2022 Build Tools with the "Desktop development with C++" workload.
-- Microsoft Edge WebView2 Runtime. Windows 11 includes it.
-- Node.js 22 or later.
+- Visual Studio Build Tools with the "Desktop development with C++" workload.
+
+No Node.js or WebView2 is needed for the native v0.5.0 app.
 
 Commands:
-1. `npm install`
-2. `cargo test --workspace`
-3. `npm run build`
-4. `npm run tauri dev` starts the widget in development mode.
-5. `npm run tauri build` makes the installer in `target/release/bundle/nsis/`.
+1. `cargo test --workspace`
+2. `cargo run -p quotaglass-app`
+3. `cargo build --release -p quotaglass-app` (outputs `target/release/quotaglass-app.exe`)
+
+The legacy v0.4.0 Tauri app remains in `src-tauri/` for rollback if needed.
 
 ## License
 
